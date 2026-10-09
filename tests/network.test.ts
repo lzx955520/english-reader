@@ -1,19 +1,155 @@
-import {describe,it,expect,vi} from 'vitest';
-import {NewsService,parseNews,callAI} from '../electron/network';
-import {defaults} from '../electron/domain';
-const paragraph='The researchers acknowledged that the international community must carefully consider the consequences of this important discovery before introducing new policies. ';
-const text='<p>'+paragraph.repeat(15)+'</p>';
-function data(now=new Date()){return {parse:{text,wikitext:'{{date|'+now.toISOString().slice(0,10)+'}}\n{{publish}}'}};}
-describe('real-source protocol using explicit fixtures',()=>{
- it('parses licensed news metadata, publication date and original text',()=>{const a=parseNews(12,'A research discovery',data());expect(a?.kind).toBe('news');expect(a?.license).toBe('CC BY 4.0');expect(a?.url).toBe('https://en.wikinews.org/?curid=12');expect(a?.words).toBeGreaterThan(200);});
- it('rejects stale, undated, retracted and oversized articles',()=>{expect(parseNews(1,'old',data(new Date('2001-01-01')))).toBeNull();expect(parseNews(1,'missing',{parse:{text,wikitext:'{{publish}}'}})).toBeNull();const d=data();d.parse.wikitext+='{{retracted}}';expect(parseNews(1,'retracted',d)).toBeNull();expect(parseNews(1,'large',{parse:{text:'<p>'+paragraph.repeat(500)+'</p>',wikitext:data().parse.wikitext}})).toBeNull();});
- it('fetches real API paths, returns only supported articles, and can fail offline',async()=>{
-  const fetcher=vi.fn(async(url:string)=>{expect(url).toContain('https://en.wikinews.org/w/api.php');return new Response(JSON.stringify(url.includes('categorymembers')?{query:{rightsinfo:{url:'https://creativecommons.org/licenses/by/4.0/'},categorymembers:[{pageid:12,title:'A research discovery'}]}}:data()));});
-  expect((await new NewsService(fetcher).refresh(new AbortController().signal))[0].title).toBe('A research discovery');expect(fetcher).toHaveBeenCalledTimes(2);
-  await expect(new NewsService(async()=>{throw Error('offline');}).refresh(new AbortController().signal)).rejects.toThrow('offline');
- });
- it('refuses to fetch content when source license is missing or unsupported',async()=>{const f=vi.fn(async()=>new Response(JSON.stringify({query:{categorymembers:[{pageid:1,title:'unknown'}],rightsinfo:{url:'https://example.com/proprietary'}}})));await expect(new NewsService(f).refresh(new AbortController().signal)).rejects.toThrow('许可');expect(f).toHaveBeenCalledTimes(1);});
- it('cancels requests without returning generated fallback content',async()=>{const c=new AbortController();const fetcher=async(_url:string,opts?:RequestInit)=>new Promise<Response>((_resolve,reject)=>{opts?.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')));});const result=new NewsService(fetcher).refresh(c.signal);c.abort();await expect(result).rejects.toThrow('aborted');});
- it('uses compatible API and limits the answer without live paid calls',async()=>{const f=vi.fn(async(_url:string,opts?:RequestInit)=>{expect(opts?.headers).toHaveProperty('Authorization','Bearer test-secret');const b=JSON.parse(opts!.body as string);expect(b.model).toBe('deepseek-chat');expect(b.max_tokens).toBe(1800);return new Response(JSON.stringify({choices:[{message:{content:'fixture explanation'}}]}));});expect(await callAI(defaults.models.context,'test-secret','context','truth','It is a truth.',new AbortController().signal,f)).toBe('fixture explanation');expect(f.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions');});
- it('blocks missing keys and reports HTTP errors without leaking response bodies',async()=>{await expect(callAI(defaults.models.context,'','context','truth','',new AbortController().signal)).rejects.toThrow('未配置');const f=async()=>new Response('test-secret should never be surfaced',{status:401});await expect(callAI(defaults.models.context,'test-secret','context','truth','',new AbortController().signal,f)).rejects.toThrow('HTTP 401');});
+import { describe, it, expect, vi } from "vitest";
+import { NewsService, parseNews, callAI } from "../electron/network";
+import { defaults } from "../electron/domain";
+const paragraph =
+  "The researchers acknowledged that the international community must carefully consider the consequences of this important discovery before introducing new policies. ";
+const text = "<p>" + paragraph.repeat(15) + "</p>";
+function data(now = new Date()) {
+  return {
+    parse: {
+      text,
+      wikitext: "{{date|" + now.toISOString().slice(0, 10) + "}}\n{{publish}}",
+    },
+  };
+}
+describe("real-source protocol using explicit fixtures", () => {
+  it("parses licensed news metadata, publication date and original text", () => {
+    const a = parseNews(12, "A research discovery", data());
+    expect(a?.kind).toBe("news");
+    expect(a?.license).toBe("CC BY 4.0");
+    expect(a?.url).toBe("https://en.wikinews.org/?curid=12");
+    expect(a?.words).toBeGreaterThan(200);
+  });
+  it("rejects stale, undated, retracted and oversized articles", () => {
+    expect(parseNews(1, "old", data(new Date("2001-01-01")))).toBeNull();
+    expect(
+      parseNews(1, "missing", { parse: { text, wikitext: "{{publish}}" } }),
+    ).toBeNull();
+    const d = data();
+    d.parse.wikitext += "{{retracted}}";
+    expect(parseNews(1, "retracted", d)).toBeNull();
+    expect(
+      parseNews(1, "large", {
+        parse: {
+          text: "<p>" + paragraph.repeat(500) + "</p>",
+          wikitext: data().parse.wikitext,
+        },
+      }),
+    ).toBeNull();
+  });
+  it("fetches real API paths, returns only supported articles, and can fail offline", async () => {
+    const fetcher = vi.fn(async (url: string) => {
+      expect(url).toContain("https://en.wikinews.org/w/api.php");
+      return new Response(
+        JSON.stringify(
+          url.includes("categorymembers")
+            ? {
+                query: {
+                  rightsinfo: {
+                    url: "https://creativecommons.org/licenses/by/4.0/",
+                  },
+                  categorymembers: [
+                    { pageid: 12, title: "A research discovery" },
+                  ],
+                },
+              }
+            : data(),
+        ),
+      );
+    });
+    expect(
+      (await new NewsService(fetcher).refresh(new AbortController().signal))[0]
+        .title,
+    ).toBe("A research discovery");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await expect(
+      new NewsService(async () => {
+        throw Error("offline");
+      }).refresh(new AbortController().signal),
+    ).rejects.toThrow("offline");
+  });
+  it("refuses to fetch content when source license is missing or unsupported", async () => {
+    const f = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            query: {
+              categorymembers: [{ pageid: 1, title: "unknown" }],
+              rightsinfo: { url: "https://example.com/proprietary" },
+            },
+          }),
+        ),
+    );
+    await expect(
+      new NewsService(f).refresh(new AbortController().signal),
+    ).rejects.toThrow("许可");
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+  it("cancels requests without returning generated fallback content", async () => {
+    const c = new AbortController();
+    const fetcher = async (_url: string, opts?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        opts?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        );
+      });
+    const result = new NewsService(fetcher).refresh(c.signal);
+    c.abort();
+    await expect(result).rejects.toThrow("aborted");
+  });
+  it("uses compatible API and limits the answer without live paid calls", async () => {
+    const f = vi.fn(async (_url: string, opts?: RequestInit) => {
+      expect(opts?.headers).toHaveProperty(
+        "Authorization",
+        "Bearer test-secret",
+      );
+      const b = JSON.parse(opts!.body as string);
+      expect(b.model).toBe("deepseek-chat");
+      expect(b.max_tokens).toBe(1800);
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "fixture explanation" } }],
+        }),
+      );
+    });
+    expect(
+      await callAI(
+        defaults.models.context,
+        "test-secret",
+        "context",
+        "truth",
+        "It is a truth.",
+        new AbortController().signal,
+        f,
+      ),
+    ).toBe("fixture explanation");
+    expect(f.mock.calls[0][0]).toBe(
+      "https://api.deepseek.com/chat/completions",
+    );
+  });
+  it("blocks missing keys and reports HTTP errors without leaking response bodies", async () => {
+    await expect(
+      callAI(
+        defaults.models.context,
+        "",
+        "context",
+        "truth",
+        "",
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("未配置");
+    const f = async () =>
+      new Response("test-secret should never be surfaced", { status: 401 });
+    await expect(
+      callAI(
+        defaults.models.context,
+        "test-secret",
+        "context",
+        "truth",
+        "",
+        new AbortController().signal,
+        f,
+      ),
+    ).rejects.toThrow("HTTP 401");
+  });
 });

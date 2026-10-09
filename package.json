@@ -2,7 +2,7 @@
   "name": "english-reader",
   "version": "0.1.0",
   "private": true,
-  "description": "\u6bcf\u65e5\u82f1\u8bed\u7cbe\u8bfb\u4e0e\u95f4\u9694\u590d\u4e60\u684c\u9762\u5e94\u7528",
+  "description": "每日英语精读与间隔复习桌面应用",
   "author": "english-reader contributors",
   "license": "MIT",
   "main": "dist-electron/main.cjs",
