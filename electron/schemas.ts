@@ -1,4 +1,50 @@
 import { z } from "zod";
+
+// This is literal-host validation only; it does not resolve DNS or police redirects.
+function blockedIPv4(host: string) {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) return false;
+  const [a, b] = host.split(".").map(Number);
+  return (
+    a === 0 || a === 10 || a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
+}
+function blockedHost(hostname: string) {
+  // WHATWG URL canonicalizes IPv4 aliases and IPv6 compression before this check.
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (!host.startsWith("[")) return blockedIPv4(host);
+  const address = host.slice(1, -1);
+  const halves = address.split("::");
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves[1] ? halves[1].split(":") : [];
+  const words = (
+    halves.length === 1
+      ? left
+      : [...left, ...Array(8 - left.length - right.length).fill("0"), ...right]
+  ).map((word) => parseInt(word, 16));
+  // Unspecified, loopback, unique-local, link-local and deprecated site-local.
+  if (
+    words.every((word) => word === 0) ||
+    (words.slice(0, 7).every((word) => word === 0) && words[7] === 1) ||
+    (words[0] & 0xfe00) === 0xfc00 ||
+    (words[0] & 0xffc0) === 0xfe80 ||
+    (words[0] & 0xffc0) === 0xfec0
+  ) return true;
+  // IPv4-mapped and deprecated IPv4-compatible forms must share IPv4 policy.
+  if (
+    words.slice(0, 5).every((word) => word === 0) &&
+    (words[5] === 0xffff || words[5] === 0)
+  ) {
+    return blockedIPv4([
+      words[6] >> 8, words[6] & 255, words[7] >> 8, words[7] & 255,
+    ].join("."));
+  }
+  return false;
+}
+
 export const feature = z.enum(["context", "grammar", "selection"]);
 export const model = z.object({
   provider: z.enum(["deepseek", "compatible"]),
@@ -7,16 +53,19 @@ export const model = z.object({
     .url()
     .max(300)
     .refine((s) => {
-      const u = new URL(s);
-      return (
-        u.protocol === "https:" &&
-        !u.username &&
-        !u.password &&
-        !u.search &&
-        !u.hash &&
-        u.hostname !== "localhost" &&
-        !/^(127\.|0\.|169\.254\.|10\.|192\.168\.)/.test(u.hostname)
-      );
+      try {
+        const u = new URL(s);
+        return (
+          u.protocol === "https:" &&
+          !u.username &&
+          !u.password &&
+          !u.search &&
+          !u.hash &&
+          !blockedHost(u.hostname)
+        );
+      } catch {
+        return false;
+      }
     }, "接口必须为不含凭据的公网 HTTPS 地址"),
   model: z.string().trim().min(1).max(100),
 });

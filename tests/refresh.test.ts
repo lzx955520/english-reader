@@ -3,7 +3,10 @@ import { RefreshManager } from "../electron/refresh";
 function cache() {
   let lastRefresh = "";
   return {
-    state: () => ({ lastRefresh }),
+    state: () => ({
+      lastRefresh,
+      articles: [{ id: "wikinews-12", url: "https://en.wikinews.org/?curid=12" }],
+    }),
     addArticles: vi.fn(() => {
       lastRefresh = "2026-10-09";
       return 1;
@@ -19,6 +22,10 @@ it("skips a successful same-day refresh and updates after local day changes", as
   await manager.refresh();
   await manager.refresh();
   expect(source.refresh).toHaveBeenCalledTimes(1);
+  expect(source.refresh).toHaveBeenCalledWith(
+    expect.any(AbortSignal),
+    c.state().articles,
+  );
   day = "2026-10-10";
   await manager.refresh();
   expect(source.refresh).toHaveBeenCalledTimes(2);

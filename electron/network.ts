@@ -78,7 +78,10 @@ export function parseNews(
 }
 export class NewsService {
   constructor(private fetcher: Fetcher = fetch) {}
-  async refresh(signal: AbortSignal) {
+  async refresh(
+    signal: AbortSignal,
+    cached: ReadonlyArray<Pick<Article, "id" | "url">> = [],
+  ) {
     const get = async (params: Record<string, string>) => {
       const url = new URL("https://en.wikinews.org/w/api.php");
       for (const [k, v] of Object.entries({
@@ -131,9 +134,19 @@ export class NewsService {
     if (!Array.isArray(list?.query?.categorymembers))
       throw Error("无法获取真实新闻列表");
     const articles: Article[] = [];
+    const seenIds = new Set(cached.map((a) => a.id));
+    const seenUrls = new Set(cached.map((a) => a.url));
     let failures = 0;
-    for (const item of list.query.categorymembers.slice(0, 10)) {
+    let attempted = 0;
+    for (const item of list.query.categorymembers.slice(0, 12)) {
       signal.throwIfAborted();
+      const id = `wikinews-${item.pageid}`;
+      const url = `https://en.wikinews.org/?curid=${item.pageid}`;
+      if (seenIds.has(id) || seenUrls.has(url)) continue;
+      seenIds.add(id);
+      seenUrls.add(url);
+      if (attempted >= 10) break;
+      attempted++;
       try {
         const parsed = await get({
           action: "parse",
@@ -155,7 +168,8 @@ export class NewsService {
       }
       if (articles.length >= 3) break;
     }
-    if (!articles.length)
+    // An entirely cached list is a successful check with no new material.
+    if (!articles.length && (attempted > 0 || !list.query.categorymembers.length))
       throw Error(
         failures
           ? "新闻正文获取失败，保留已有缓存"

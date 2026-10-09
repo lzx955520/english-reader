@@ -1,12 +1,15 @@
 import type { Article } from "../src/types";
 import { localDay } from "./domain";
 interface Cache {
-  state(): { lastRefresh: string };
+  state(): { lastRefresh: string; articles: Pick<Article, "id" | "url">[] };
   addArticles(articles: Article[]): number;
   refreshFailure(error: string): void;
 }
 interface Source {
-  refresh(signal: AbortSignal): Promise<Article[]>;
+  refresh(
+    signal: AbortSignal,
+    cached: ReadonlyArray<Pick<Article, "id" | "url">>,
+  ): Promise<Article[]>;
 }
 export class RefreshManager {
   private active: Promise<{ added: number; cancelled?: boolean }> | null = null;
@@ -30,7 +33,10 @@ export class RefreshManager {
     this.controller = controller;
     this.active = (async () => {
       try {
-        const articles = await this.source.refresh(controller.signal);
+        const articles = await this.source.refresh(
+          controller.signal,
+          this.cache.state().articles,
+        );
         controller.signal.throwIfAborted();
         this.retryAfter = 0;
         return { added: this.cache.addArticles(articles) };

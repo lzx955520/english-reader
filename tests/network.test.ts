@@ -68,6 +68,64 @@ describe("real-source protocol using explicit fixtures", () => {
       }).refresh(new AbortController().signal),
     ).rejects.toThrow("offline");
   });
+
+  it("skips cached IDs and URLs before the three-new-article cap", async () => {
+    const parsedIds: number[] = [];
+    const fetcher = vi.fn(async (url: string) => {
+      const params = new URL(url).searchParams;
+      if (params.get("action") === "query") {
+        return new Response(JSON.stringify({ query: {
+          rightsinfo: { url: "https://creativecommons.org/licenses/by/4.0/" },
+          categorymembers: Array.from({ length: 12 }, (_, i) => ({
+            pageid: i + 1, title: "News " + (i + 1),
+          })),
+        } }));
+      }
+      parsedIds.push(Number(params.get("pageid")));
+      return new Response(JSON.stringify(data()));
+    });
+    const cached = Array.from({ length: 9 }, (_, i) => ({
+      id: i === 8 ? "imported-id" : "wikinews-" + (i + 1),
+      url: "https://en.wikinews.org/?curid=" + (i + 1),
+    }));
+    const articles = await new NewsService(fetcher).refresh(
+      new AbortController().signal, cached,
+    );
+    expect(articles.map((a) => a.id).sort()).toEqual([
+      "wikinews-10", "wikinews-11", "wikinews-12",
+    ]);
+    expect(parsedIds).toEqual([10, 11, 12]);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+  it("treats an entirely cached list as no new articles without fetching bodies", async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ query: {
+      rightsinfo: { url: "https://creativecommons.org/licenses/by/4.0/" },
+      categorymembers: [{ pageid: 12, title: "Cached" }],
+    } })));
+    await expect(new NewsService(fetcher).refresh(new AbortController().signal, [
+      { id: "wikinews-12", url: "https://en.wikinews.org/?curid=12" },
+    ])).resolves.toEqual([]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("deduplicates candidates and still limits unsuccessful body requests to ten", async () => {
+    const parsedIds: string[] = [];
+    const fetcher = async (url: string) => {
+      const params = new URL(url).searchParams;
+      if (params.get("action") === "query") return new Response(JSON.stringify({ query: {
+        rightsinfo: { url: "https://creativecommons.org/licenses/by/4.0/" },
+        categorymembers: [1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((pageid) => ({
+          pageid, title: "Old news",
+        })),
+      } }));
+      parsedIds.push(params.get("pageid")!);
+      return new Response(JSON.stringify(data(new Date("2001-01-01"))));
+    };
+    await expect(new NewsService(fetcher).refresh(
+      new AbortController().signal,
+    )).rejects.toThrow("没有符合");
+    expect(parsedIds).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+  });
+
   it("refuses to fetch content when source license is missing or unsupported", async () => {
     const f = vi.fn(
       async () =>
