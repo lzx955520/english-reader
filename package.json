@@ -13,10 +13,10 @@
     "test": "vitest run",
     "test:ui": "npm run build && playwright test",
     "licenses": "node scripts/licenses.mjs",
-    "dist:win": "npm run build && npm run licenses && electron-builder --win nsis portable --x64",
-    "dist:linux": "npm run build && electron-builder --linux dir",
+    "dist:win": "npm run build && npm run licenses && electron-builder --win nsis portable --x64 --publish never",
+    "dist:linux": "npm run build && electron-builder --linux dir --publish never",
     "test:live": "npm run build && node scripts/check-live-news.cjs",
-    "dist:portable": "npm run build && npm run licenses && electron-builder --win portable --x64"
+    "dist:portable": "npm run build && npm run licenses && electron-builder --win portable --x64 --publish never"
   },
   "dependencies": {
     "react": "^19.2.0",
