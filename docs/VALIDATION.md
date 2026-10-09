@@ -1,6 +1,6 @@
 # 初版验证记录
 
-验证日期：2026-10-09。执行位置：云端 `/workspace/english-reader`；没有操作用户电脑。
+验证日期：2026-10-09。早期执行位置：云端 `/workspace/english-reader`；后续 CI 在 GitHub 托管 Ubuntu / Windows runner 执行，没有操作用户电脑。
 
 ## 已通过
 
@@ -47,8 +47,19 @@ DeepSeek 官方组织的 GitHub 集成文档可通过现有 Git 通道读取，�
 
 Electron Windows x64 程序目录 `release/win-unpacked` 已构建，包含应用 asar、SQLite WASM、离线词典、经典及第三方许可。Windows 运行所需原生 Electron 文件由 electron-builder 从官方发布渠道下载并按其工具链验证。
 
-Linux 交叉构建 NSIS 安装器先因缺少 Wine 失败；在 `/tmp` 通过 Debian 签名包索引及包校验获取 Wine 后，仍因运行库初始化不完整失败。失败的 Setup.exe 是构建中间文件，不作为可用安装器分发。Windows 原生构建步骤及 CI 工作流已提供，但 CI 未在本次任务中运行。
+Linux 交叉构建 NSIS 安装器先因缺少 Wine 失败；在 `/tmp` 通过 Debian 签名包索引及包校验获取 Wine 后，仍因运行库初始化不完整失败。失败的 Setup.exe 是构建中间文件，不作为可用安装器分发。后续 Windows CI 原生构建已成功，详情见下方记录；上述失败仅描述早期 Linux 交叉构建。
 
 `npm run dist:portable` 对应的 Linux 交叉构建已成功生成 Windows x64 便携 EXE（约 90 MB），无需 NSIS 卸载器的 Wine 执行步骤。检查 app.asar 确认包含 main / preload、SQLite WASM、词典、经典、THIRD_PARTY_NOTICES 和 29 份运行依赖许可。PE 签名目录为空，证实未签名；校验和保存在 release/SHA256SUMS.txt，文件不加入 Git 或公开发布。
 
 没有 Windows 实机验证，以下均不宣称通过：原生启动、系统语音发音、DPAPI 加密、安装 / 卸载、SmartScreen 行为、Windows 日期 / 网络变化通知。初版未签名，不自动更新应用二进制，也不配置开机启动。
+
+## GitHub Actions 后续验证（2026-10-09）
+
+验证提交：`d0e4ea77de7dc7bfcef86d00067618766db25fea`。工作流：[Build and test #3](https://github.com/lzx955520/english-reader/actions/runs/37949862819)，最终状态为 success。
+
+- Ubuntu checks：构建内 TypeScript 检查、生产构建、5 个文件 / 26 项测试、29 个运行依赖许可检查，以及 2 条真实 Electron 无头 UI 流程均通过。
+- Windows windows-package：`npm run dist:win` 成功，生成 `English-Reader-0.1.0-x64-Setup.exe` 和 `English-Reader-0.1.0-x64-Portable.exe`；上传步骤确认 2 个文件。
+- [Windows x64 artifact 下载](https://github.com/lzx955520/english-reader/actions/runs/37949862819/artifacts/11625472144)：ZIP 为 217,439,700 字节，SHA-256 为 `7fec919c4c7493f44e64486837fa6727ee4bd5fc5c971994d758083f2fa1c860`，到期时间 2026-10-16 15:13 UTC。下载可能要求登录 GitHub；到期后需使用后续成功工作流的产物。
+- 修复了 electron-builder 在 CI 隐式尝试发布、缺少 GH_TOKEN 导致失败的问题。所有打包脚本显式使用 `--publish never`；未增加令牌或权限，未创建 Release。
+- 打包成功不等于 Windows 实机功能验证。原生启动、DPAPI、系统语音、安装 / 卸载仍未测试。
+- `npm ci` 日志报告完整依赖树有 13 个已知漏洞（9 moderate、2 high、2 critical），需要按具体依赖和可达性审查。此前运行依赖审计的历史结果不代表完整依赖树无漏洞。CI 将只读保存并输出 `npm audit --json` 报告，不自动升级依赖；存在漏洞的报告不使构建检查失败，因此 CI 绿色也不代表安全审查通过。当前产物仅作预览，不建议广泛分发。
