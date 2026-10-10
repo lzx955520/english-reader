@@ -315,6 +315,10 @@ test("session consent covers explicit requests, survives reload, revokes, and ex
   await mockAI();
   const toggle = page.getByRole("switch", { name: /本次 AI 授权/ });
   await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await desktop.evaluate(() => { (globalThis as any).aiTest.response = 0; });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await desktop.evaluate(() => { (globalThis as any).aiTest.response = 1; (globalThis as any).aiTest.dialogs = []; });
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   const details = await desktop.evaluate(() => (globalThis as any).aiTest.dialogs[0].detail);
@@ -355,7 +359,11 @@ test("native per-request confirmation cannot be bypassed; configuration and rest
   expect(denied).toContain("取消");
   expect(await desktop.evaluate(() => (globalThis as any).aiTest.requests.length)).toBe(0);
   await desktop.evaluate(() => { (globalThis as any).aiTest.response = 1; });
-  expect(await ai()).toBe("mock result");
+  expect(await page.evaluate(() => window.reader.ai({ feature: "grammar", text: "x".repeat(15000), context: "y".repeat(15000), operationId: "long-preview" }))).toBe("mock result");
+  const preview = await desktop.evaluate(() => (globalThis as any).aiTest.dialogs.at(-1).detail);
+  expect(preview.length).toBeLessThan(1600);
+  expect(preview).toContain("完整 15000 字符");
+  expect(await desktop.evaluate(() => JSON.parse((globalThis as any).aiTest.requests[0].options.body).messages[1].content.length)).toBeGreaterThan(30000);
   expect((await page.evaluate(() => window.reader.aiConsentStatus())).enabled).toBe(false);
   for (const field of ["model", "baseUrl", "provider", "key"] as const) {
     await page.evaluate(() => window.reader.setAIConsent(true));

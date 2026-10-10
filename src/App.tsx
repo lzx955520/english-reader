@@ -71,6 +71,7 @@ export function App() {
   const [glosses, setGlosses] = useState<{ id: string; text: string; values: GlossMap }>({ id: "", text: "", values: {} });
   const [glossSaving, setGlossSaving] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const consentRevision = useRef(-1);
   const contentRef = useRef<HTMLDivElement>(null),
     lookupSequence = useRef(0),
     progressRef = useRef<{ id: string; p: number; y: number } | null>(null),
@@ -89,7 +90,11 @@ export function App() {
   const load = async () => {
     const s = await api.state();
     setState(s);
-    setSessionAI((await api.aiConsentStatus()).enabled);
+    const status = await api.aiConsentStatus();
+    if (status.revision >= consentRevision.current) {
+      consentRevision.current = status.revision;
+      setSessionAI(status.enabled);
+    }
     return s;
   };
   const report = (e: unknown) => setNotice(humanError(e));

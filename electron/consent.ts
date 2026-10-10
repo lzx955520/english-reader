@@ -7,6 +7,7 @@ export class SessionConsent {
   grant(expectedRevision: number) {
     if (expectedRevision !== this.revision) return false;
     this.enabled = true;
+    this.revision++;
     return true;
   }
   revoke() { this.enabled = false; this.revision++; }
@@ -22,4 +23,9 @@ export function consentDetails(models: Partial<Record<Feature, ModelConfig>>) {
     const config = models[feature]!;
     return `${labels[feature]}\n提供商：${config.provider}\n模型：${config.model}\n接收接口：${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   }).join("\n\n");
+}
+
+// Keep native Windows dialogs bounded; the actual immutable request remains whole.
+export function consentPreview(text: string) {
+  return text.length <= 350 ? text : `${text.slice(0, 350)}…\n（预览前 350 字符，将发送完整 ${text.length} 字符）`;
 }

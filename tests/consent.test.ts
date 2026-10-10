@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { SessionConsent, consentDetails } from "../electron/consent";
+import { SessionConsent, consentDetails, consentPreview } from "../electron/consent";
 
 describe("session-only AI consent", () => {
   it("starts off, grants only current revision, and revokes pending grants", () => {
@@ -11,6 +11,12 @@ describe("session-only AI consent", () => {
     expect(consent.grant(0)).toBe(false);
     expect(consent.grant(consent.revision)).toBe(true);
     expect(new SessionConsent().enabled).toBe(false);
+  });
+  it("bounds native dialog previews without implying truncated transmission", () => {
+    expect(consentPreview("short")).toBe("short");
+    const preview = consentPreview("x".repeat(15000));
+    expect(preview.length).toBeLessThan(450);
+    expect(preview).toContain("完整 15000 字符");
   });
   it("discloses each feature's exact recipient, model and data", () => {
     const text = consentDetails({

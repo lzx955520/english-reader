@@ -10,7 +10,7 @@ import {
 import path from "node:path";
 import fs from "node:fs";
 import { z } from "zod";
-import { SessionConsent, consentDetails } from "./consent";
+import { SessionConsent, consentDetails, consentPreview } from "./consent";
 import { Store } from "./store";
 import { UpdateManager } from "./updater";
 import { Vault } from "./vault";
@@ -187,7 +187,7 @@ function register() {
           buttons: ["取消", "同意并发送本次请求"], defaultId: 0, cancelId: 0,
           message: "授权本次 AI 请求",
           detail: consentDetails({ [r.feature]: config }) +
-            "\n\n本次文本：\n" + r.text + "\n\n上下文：\n" + (r.context || "无") +
+            "\n\n本次文本：\n" + consentPreview(r.text) + "\n\n上下文：\n" + consentPreview(r.context || "无") +
             "\n\n将以上内容发送给所示接口，可能产生 API 费用；不会自动重试。",
         });
         if (result.response !== 1 || window !== owner || owner.isDestroyed()) throw Error("请求已取消");
