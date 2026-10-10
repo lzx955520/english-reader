@@ -1,6 +1,6 @@
 {
   "name": "english-reader",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "每日英语精读与间隔复习桌面应用",
   "author": "english-reader contributors",
@@ -98,3 +98,4 @@
     "afterPack": "scripts/package-policy.cjs"
   }
 }
+

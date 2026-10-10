@@ -207,6 +207,7 @@ export async function callAI(
   if (!key) throw Error("未配置 API 密钥；阅读、词典、收藏和复习仍可使用");
   const base = config.baseUrl.replace(/\/+$/, "");
   const r = await fetcher(base + "/chat/completions", {
+    redirect: "error",
     method: "POST",
     signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]),
     headers: {
@@ -238,3 +239,4 @@ export async function callAI(
     throw Error("模型未返回有效解释");
   return result;
 }
+

@@ -3,6 +3,8 @@ import type { ReaderAPI } from "../src/types";
 const invoke = (channel: string, ...args: unknown[]) =>
   ipcRenderer.invoke(channel, ...args);
 const api: ReaderAPI = {
+  aiConsentStatus: () => invoke("aiConsentStatus"),
+  setAIConsent: (enabled) => invoke("setAIConsent", enabled),
   updateStatus: () => invoke("updateStatus"),
   checkUpdate: () => invoke("checkUpdate"),
   downloadUpdate: () => invoke("downloadUpdate"),
@@ -29,3 +31,4 @@ contextBridge.exposeInMainWorld("reader", api);
 window.addEventListener("online", () => {
   void invoke("refresh", true).catch(() => {});
 });
+

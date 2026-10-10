@@ -71,7 +71,6 @@ export type AIRequest = {
   feature: Feature;
   text: string;
   context?: string;
-  approved: boolean;
   operationId: string;
 };
 export type UpdateStatus = {
@@ -83,6 +82,8 @@ export type UpdateStatus = {
   total?: number;
 };
 export interface ReaderAPI {
+  aiConsentStatus(): Promise<{ enabled: boolean; revision: number }>;
+  setAIConsent(enabled: boolean): Promise<{ enabled: boolean; revision: number }>;
   updateStatus(): Promise<UpdateStatus>;
   checkUpdate(): Promise<UpdateStatus>;
   downloadUpdate(): Promise<UpdateStatus>;
@@ -126,3 +127,4 @@ export type SourceDiagnostic = {
   candidates: number; added: number; duplicates: number; filtered: number;
   failures: number; cached: number; message: string;
 };
+

@@ -266,7 +266,7 @@ test("update controls show installed version and unpublished channel without cha
   const before = await page.evaluate(() => window.reader.state());
   await page.getByRole("button", { name: "设置与数据" }).click();
   const updates = page.getByRole("region", { name: "应用更新" });
-  await expect(updates).toContainText("当前版本：0.3.0");
+  await expect(updates).toContainText("当前版本：0.3.1");
   await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await expect(updates).toContainText("公开更新渠道尚未发布");
   await expect(page.getByRole("button", { name: "下载安装包", exact: true })).toHaveCount(0);
@@ -275,4 +275,129 @@ test("update controls show installed version and unpublished channel without cha
   await page.getByRole("button", { name: "设置与数据" }).click();
   await expect(updates).toContainText("公开更新渠道尚未发布");
   expect((await page.evaluate(() => window.reader.state())).cards).toEqual(before.cards);
+});
+
+
+// Native dialogs and transport are mocked in the Electron main process; no real
+// credentials or paid requests are used. Production exposes none of these mocks.
+async function mockAI() {
+  await desktop.evaluate(({ dialog, net, safeStorage }) => {
+    const g = globalThis as any;
+    g.aiTest = { dialogs: [], requests: [], response: 1, holdDialog: false, holdRequest: false };
+    safeStorage.isEncryptionAvailable = () => true;
+    safeStorage.getSelectedStorageBackend = () => "gnome_libsecret";
+    safeStorage.encryptString = value => Buffer.from(value);
+    safeStorage.decryptString = value => value.toString();
+    dialog.showMessageBox = (async (_owner: unknown, options: unknown) => {
+      g.aiTest.dialogs.push(options);
+      if (g.aiTest.holdDialog) return new Promise(resolve => { g.aiTest.resolveDialog = resolve; });
+      return { response: g.aiTest.response, checkboxChecked: false };
+    }) as any;
+    net.fetch = (async (url: unknown, options: any) => {
+      g.aiTest.requests.push({ url, options });
+      if (g.aiTest.holdRequest) return new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => reject(Error("aborted")), { once: true });
+      });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "mock result" } }] }), { status: 200 });
+    }) as any;
+  });
+  await page.evaluate(async () => {
+    const s = await window.reader.state();
+    await window.reader.saveSettings(s.settings, { context: "test-only", grammar: "test-only", selection: "test-only" });
+  });
+}
+const ai = (feature: "context" | "grammar" | "selection" = "context") => page.evaluate(async f => {
+  try { return await window.reader.ai({ feature: f, text: "original text", context: "original paragraph", operationId: "consent-test" }); }
+  catch (error) { return String(error); }
+}, feature);
+
+test("session consent covers explicit requests, survives reload, revokes, and expires on exit", async () => {
+  await mockAI();
+  const toggle = page.getByRole("switch", { name: /本次 AI 授权/ });
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  const details = await desktop.evaluate(() => (globalThis as any).aiTest.dialogs[0].detail);
+  expect(details).toContain("语境释义"); expect(details).toContain("语法分析"); expect(details).toContain("新闻筛选");
+  expect(await desktop.evaluate(() => (globalThis as any).aiTest.requests.length)).toBe(0);
+  for (const feature of ["context", "grammar", "selection"] as const) expect(await ai(feature)).toBe("mock result");
+  expect(await desktop.evaluate(() => (globalThis as any).aiTest.dialogs.length)).toBe(1);
+  expect(await desktop.evaluate(() => (globalThis as any).aiTest.requests.every((r: any) => r.options.redirect === "error"))).toBe(true);
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await page.evaluate(async () => {
+    const s = await window.reader.state(); s.settings.dailyMinutes = 45;
+    await window.reader.saveSettings(s.settings, {});
+  });
+  expect((await page.evaluate(() => window.reader.aiConsentStatus())).enabled).toBe(true);
+  await desktop.evaluate(() => { (globalThis as any).aiTest.holdRequest = true; });
+  const pending = ai();
+  await expect.poll(() => desktop.evaluate(() => (globalThis as any).aiTest.requests.length)).toBe(4);
+  await toggle.click();
+  expect(await pending).toContain("取消");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await desktop.evaluate(() => { (globalThis as any).aiTest.response = 0; });
+  expect(await ai()).toContain("取消");
+  expect(await desktop.evaluate(() => (globalThis as any).aiTest.requests.length)).toBe(4);
+  await desktop.evaluate(() => { (globalThis as any).aiTest.response = 1; });
+  await toggle.click();
+  await desktop.close(); await launch();
+  await expect(page.getByRole("switch", { name: /本次 AI 授权/ })).toHaveAttribute("aria-checked", "false");
+});
+
+test("native per-request confirmation cannot be bypassed; configuration and restore invalidate grants", async () => {
+  await mockAI();
+  await desktop.evaluate(() => { (globalThis as any).aiTest.response = 0; });
+  const denied = await page.evaluate(async () => {
+    try { return await window.reader.ai({ feature: "context", text: "text", approved: true, operationId: "forged" } as any); }
+    catch (error) { return String(error); }
+  });
+  expect(denied).toContain("取消");
+  expect(await desktop.evaluate(() => (globalThis as any).aiTest.requests.length)).toBe(0);
+  await desktop.evaluate(() => { (globalThis as any).aiTest.response = 1; });
+  expect(await ai()).toBe("mock result");
+  expect((await page.evaluate(() => window.reader.aiConsentStatus())).enabled).toBe(false);
+  for (const field of ["model", "baseUrl", "provider", "key"] as const) {
+    await page.evaluate(() => window.reader.setAIConsent(true));
+    await page.evaluate(async field => {
+      const s = await window.reader.state();
+      const c = s.settings.models.grammar;
+      if (field === "model") c.model = "other-model";
+      if (field === "baseUrl") c.baseUrl = "https://other.example/v1";
+      if (field === "provider") c.provider = c.provider === "deepseek" ? "compatible" : "deepseek";
+      await window.reader.saveSettings(s.settings, field === "key" ? { grammar: "another-test-key" } : {});
+    }, field);
+    expect((await page.evaluate(() => window.reader.aiConsentStatus())).enabled).toBe(false);
+  }
+  await page.evaluate(() => window.reader.setAIConsent(true));
+  const backupPath = path.join(directory, "consent-backup.json");
+  await desktop.evaluate(({ dialog }, file) => {
+    dialog.showSaveDialog = (async () => ({ canceled: false, filePath: file })) as any;
+    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [file] })) as any;
+  }, backupPath);
+  await page.evaluate(() => window.reader.backup());
+  const backup = JSON.parse(fs.readFileSync(backupPath, "utf8"));
+  expect(JSON.stringify(backup)).not.toMatch(/aiConsent|sessionAI|revision/);
+  await page.evaluate(() => window.reader.restore());
+  expect((await page.evaluate(() => window.reader.aiConsentStatus())).enabled).toBe(false);
+});
+
+test("revocation or settings change while dialog is open cannot grant stale consent or send stale requests", async () => {
+  await mockAI();
+  await desktop.evaluate(() => { (globalThis as any).aiTest.holdDialog = true; });
+  const grant = page.evaluate(() => window.reader.setAIConsent(true));
+  await expect.poll(() => desktop.evaluate(() => !!(globalThis as any).aiTest.resolveDialog)).toBe(true);
+  await page.evaluate(() => window.reader.setAIConsent(false));
+  await desktop.evaluate(() => { (globalThis as any).aiTest.resolveDialog({ response: 1 }); });
+  expect((await grant).enabled).toBe(false);
+  await desktop.evaluate(() => { delete (globalThis as any).aiTest.resolveDialog; });
+  const pending = ai();
+  await expect.poll(() => desktop.evaluate(() => !!(globalThis as any).aiTest.resolveDialog)).toBe(true);
+  await page.evaluate(async () => {
+    const s = await window.reader.state(); s.settings.models.context.baseUrl = "https://changed.example/v1";
+    await window.reader.saveSettings(s.settings, {});
+  });
+  await desktop.evaluate(() => { (globalThis as any).aiTest.resolveDialog({ response: 1 }); });
+  expect(await pending).toContain("取消");
+  expect(await desktop.evaluate(() => (globalThis as any).aiTest.requests.length)).toBe(0);
 });
