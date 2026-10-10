@@ -107,6 +107,9 @@ export function buildGlosses(
     checked.add(word);
     const definition = lookup(word);
     if (!definition.found) continue;
+    // The shipped generator lowercases dictionary headwords; retain explicit name/place labels.
+    if (/(?:人名|地名|姓氏|音译)/.test(definition.translation) ||
+      /\b(?:surname|given name|capital of|city in|state in)\b/i.test(definition.definition)) continue;
     const tags = (definition.tag || "").toLowerCase().split(/[\s,;|]+/);
     const commonRank = [definition.bnc, definition.frq].some(
       (rank) => typeof rank === "number" && rank > 0 && rank <= 6000,

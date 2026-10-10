@@ -107,7 +107,7 @@ describe("real-source protocol using explicit fixtures", () => {
     ])).resolves.toEqual([]);
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
-  it("deduplicates candidates and still limits unsuccessful body requests to ten", async () => {
+  it("deduplicates candidates and checks the bounded candidate window despite filtered early results", async () => {
     const parsedIds: string[] = [];
     const fetcher = async (url: string) => {
       const params = new URL(url).searchParams;
@@ -123,7 +123,7 @@ describe("real-source protocol using explicit fixtures", () => {
     await expect(new NewsService(fetcher).refresh(
       new AbortController().signal,
     )).resolves.toEqual([]);
-    expect(parsedIds).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+    expect(parsedIds).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]);
   });
 
   it("refuses to fetch content when source license is missing or unsupported", async () => {

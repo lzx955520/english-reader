@@ -104,3 +104,8 @@ describe("bounded offline gloss heuristic", () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 });
+
+it("does not rely on dictionary headword capitals for names",()=>{
+  expect(buildGlosses("washington",()=>definition("washington",{translation:"[地名] 华盛顿",definition:"capital of the United States"}))).toEqual({});
+  expect(buildGlosses("Washington",()=>definition("washington",{translation:"华盛顿"}))).toEqual({});
+});

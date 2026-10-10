@@ -98,3 +98,24 @@ it("rejects same-host article redirect outside approved path",async()=>{
   await expect(service.refresh(new AbortController().signal)).rejects.toThrow("所有来源");
   expect(service.diagnostics[1].failures).toBeGreaterThan(0);
 });
+
+it("does not starve a valid later candidate behind six filtered articles",async()=>{
+  const urls=Array.from({length:7},(_,i)=>item.url+i);
+  const xml=`<rss><channel>${urls.map(url=>`<item><title>Fixture</title><link>${url}</link><pubDate>${now.toUTCString()}</pubDate></item>`).join("")}</channel></rss>`;
+  const service=new MultiSourceNews(async url=>{
+    if(url===readingSources[0].feed)return new Response(xml);
+    if(url===urls[6])return new Response(body);
+    if(urls.includes(url))return new Response("<article><p>Too short.</p></article>");
+    throw Error("offline fixture");
+  });
+  const articles=await service.refresh(new AbortController().signal);
+  expect(articles.map(a=>a.url)).toEqual([urls[6]]);
+  expect(service.diagnostics[1]).toMatchObject({filtered:6,added:1,status:"updated"});
+});
+it("supports each documented extraction fallback using distinct minimal markup",()=>{
+  for(const markup of [
+    "<main><div class='field--name-body'><p>"+paragraph.repeat(15)+"</p></div></main>",
+    "<main><article><p>"+paragraph.repeat(15)+"</p></article></main>",
+    "<main><div class='entry-content'><p>"+paragraph.repeat(15)+"</p></div></main>",
+  ]) expect(parseSourceArticle(markup,item,readingSources[0],now)?.words).toBeGreaterThan(100);
+});

@@ -154,7 +154,7 @@ export class NewsService {
       if (seenIds.has(id) || seenUrls.has(url)) { report.duplicates++; continue; }
       seenIds.add(id);
       seenUrls.add(url);
-      if (attempted >= 10) break;
+      if (attempted >= 12) break;
       attempted++;
       try {
         const parsed = await get({

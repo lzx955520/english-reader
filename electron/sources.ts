@@ -140,7 +140,7 @@ export class MultiSourceNews {
             signal.throwIfAborted(); timeout.throwIfAborted();
             if (seen.has(item.url)) { report.duplicates++; continue; }
             seen.add(item.url);
-            if (attempted++ >= 6 || articles.length>=3) break;
+            if (attempted++ >= 18 || articles.length>=3) break;
             try {
               const a=parseSourceArticle(await get(item.url,timeout,source),item,source);
               if(a) articles.push(a); else report.filtered++;
