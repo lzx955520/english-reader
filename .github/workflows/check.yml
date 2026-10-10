@@ -18,6 +18,9 @@ jobs:
       - run: npm run test:package
       - run: npm run licenses
       - run: xvfb-run -a npm run test:ui
+      - run: npm run package:prepare
+      - name: Test staged runtime offline
+        run: READER_E2E_APP=release/app xvfb-run -a npx --no-install playwright test
   windows-package:
     runs-on: windows-latest
     steps:

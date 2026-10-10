@@ -98,3 +98,8 @@ ELECTRON_GET_USE_PROXY=1 GLOBAL_AGENT_HTTP_PROXY="$HTTPS_PROXY" npm ci
 优先使用 NSIS 安装包；便携启动器继续保留。0.3 保持 `com.englishreader.desktop` 与 `english-reader` 名称不变，不迁移或重置用户数据目录。升级前在设置中创建完整备份，关闭旧版后自行运行安装包；不要复制 DPAPI 密钥到另一台电脑。应用不自动运行下载文件，也不绕过 Windows SmartScreen。
 
 应用固定检查 [本仓库的公开发布区](https://github.com/lzx955520/english-reader/releases)。构建成功不等于已完成正式发布：未发布时会提示没有可用版本。发布清单只包含版本、平台、架构及安装包名称、大小和 SHA-256；不会将源码仓库设为私有，也不再依赖另一个发布仓库。发布前仍需审查文件并完成 Windows 安装与旧版数据保留验证，详见 [软件更新和构建产物说明](docs/UPDATES.md)。
+
+
+### 0.3 依赖与验证安全提示
+
+2026-10-10 的 npm audit 报告仍有 13 项已知依赖发现（2 critical、2 high、9 moderate）。审计任务仅保存报告，绿色任务不代表漏洞为零；本次没有擅自升级依赖。此未签名预览版不应被视为已完成生产安全审查。Windows 原生安装、DPAPI、语音和从旧版安装升级的数据保留仍未实机验证；离线模拟测试与 CI 构建不能替代这些检查。不要关闭或绕过 SmartScreen，应用不会自动执行安装程序。

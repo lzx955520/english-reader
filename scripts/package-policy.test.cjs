@@ -58,8 +58,13 @@ test("detects secret families and excludes development metadata", () => {
 test("actual ASAR contents are checked, and CLI failures never print suspect values", () => temporary(async directory => {
   const app = path.join(directory, "app"); materialize(app, fixture());
   const archive = path.join(directory, "app.asar");
-  await require("@electron/asar").createPackage(app, archive);
+  const asar = require("@electron/asar");
+  await asar.createPackage(app, archive);
   assert.ok(policy.check(archive) > 0);
+  // Covers nested native ASAR paths, including actual unpacked WASM, on Windows and POSIX.
+  const unpackedArchive = path.join(directory, "unpacked.asar");
+  await asar.createPackageWithOptions(app, unpackedArchive, { unpack: "**/sql-wasm.wasm" });
+  assert.ok(policy.check(unpackedArchive) > 0);
   const secret = "ghp_" + "x".repeat(36);
   fs.writeFileSync(path.join(app, "dist/assets/index-123.js"), secret);
   const result = spawnSync(process.execPath, [path.join(__dirname, "package-policy.cjs"), app], { encoding: "utf8" });

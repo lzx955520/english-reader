@@ -11,7 +11,7 @@ import path from "node:path";
 let directory: string, desktop: ElectronApplication, page: Page;
 const launch = async () => {
   desktop = await electron.launch({
-    args: ["--no-sandbox", "--disable-gpu", "."],
+    args: ["--no-sandbox", "--disable-gpu", process.env.READER_E2E_APP || "."],
     env: {
       ...process.env,
       DISPLAY: process.env.DISPLAY || ":99",

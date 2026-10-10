@@ -84,14 +84,16 @@ function archiveEntries(file) {
   for (const item of asar.listPackage(file)) {
     const name = item.replace(/^[/\\]/, "").replace(/\\/g, "/");
     if (!name || name.split("/").some(part => !part || part === "." || part === "..")) fail();
-    const stat = asar.statFile(file, name, false);
+    // ASAR 3.x traverses with path.sep; keep POSIX names only for our allowlist.
+    const nativeName = name.split("/").join(path.sep);
+    const stat = asar.statFile(file, nativeName, false);
     if ("link" in stat) fail();
     if ("files" in stat) {
       if (!directories.has(name)) fail();
     } else {
       if (!allowed(name)) fail();
       if (stat.unpacked) unpacked.add(name);
-      entries.set(name, asar.extractFile(file, name));
+      entries.set(name, asar.extractFile(file, nativeName));
     }
   }
   if (fs.existsSync(file + ".unpacked")) {
