@@ -20,7 +20,7 @@ try {
   let revealed;
   let requests = 0;
   manager = new UpdateManager({
-    currentVersion: "0.2.0", platform: "win32", arch: "x64",
+    currentVersion: "0.3.0", platform: "win32", arch: "x64",
     directory: path.join(directory, "downloads"),
     fetcher: async (url, init) => {
       requests++;
@@ -34,19 +34,19 @@ try {
   assert.equal(requests, 0);
   const available = await manager.check();
   assert.equal(available.phase, "available", available.message);
-  assert.equal(available.latestVersion, "0.3.0");
-  assert.equal(available.total, 97990595);
+  assert.equal(available.latestVersion, "0.3.1");
+  assert.equal(available.total, 97991825);
   assert.equal(revealed, undefined);
   const downloaded = await manager.download();
   assert.equal(downloaded.phase, "downloaded", downloaded.message);
   assert.equal(revealed, undefined);
   assert.equal(await manager.reveal(), true);
-  assert.equal(path.basename(revealed), "English-Reader-0.3.0-x64-Setup.exe");
+  assert.equal(path.basename(revealed), "English-Reader-0.3.1-x64-Setup.exe");
   const bytes = await fs.readFile(revealed);
-  assert.equal(bytes.length, 97990595);
+  assert.equal(bytes.length, 97991825);
   assert.equal(bytes.subarray(0, 2).toString("ascii"), "MZ");
   assert.equal(createHash("sha256").update(bytes).digest("hex"),
-    "f20eb2af70600b7098adf63439367ef49e2670a602726c81f7a52b81a63e1e25");
+    "0a3e4002dff4df8d50c8c9897005bfa23250abddbfcf817e8254221fa6f25f8d");
   console.log("Public update smoke passed: anonymous latest metadata, manifest, installer download and pinned SHA-256.");
   console.log("Installer was not executed; this is not a real Windows installation or upgrade test.");
 } finally {
