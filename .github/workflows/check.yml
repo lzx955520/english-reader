@@ -32,6 +32,10 @@ jobs:
       - run: npm ci
       - run: npm run test:package
       - run: npm run dist:win
+      - name: Test Windows staged runtime offline
+        env:
+          READER_E2E_APP: release/app
+        run: npx --no-install playwright test
       - name: Validate packaged application privacy
         run: node scripts/package-policy.cjs release/win-unpacked/resources/app.asar
       - uses: actions/upload-artifact@v4
