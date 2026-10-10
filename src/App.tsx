@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { dailyArticles } from "./recommendations";
 import { annotateArticle, rawReaderSelection, type GlossMap } from "./gloss";
 import {
   BookOpen,
@@ -141,11 +142,14 @@ export function App() {
   }, [articleId, article?.text, state?.settings.inlineGlosses]);
   const toggleGlosses = async (enabled: boolean) => {
     if (!state || glossSaving) return;
+    const previous = state.settings.inlineGlosses !== false;
     setGlossSaving(true);
+    setState(current => current ? { ...current, settings: { ...current.settings, inlineGlosses: enabled } } : current);
     try {
       await api.saveSettings({ ...state.settings, inlineGlosses: enabled }, {});
       await load();
     } catch (e) {
+      setState(current => current ? { ...current, settings: { ...current.settings, inlineGlosses: previous } } : current);
       report(e);
     } finally {
       setGlossSaving(false);
@@ -348,9 +352,7 @@ export function App() {
     classics = state.articles.filter((a) => a.kind === "classic");
   const visibleNews =
     tab === "today"
-      ? news
-          .filter((a) => Date.now() - Date.parse(a.published) < 30 * 86400000)
-          .slice(0, 3)
+      ? dailyArticles(news)
       : news;
   return (
     <div className="app-shell">
