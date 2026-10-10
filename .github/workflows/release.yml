@@ -1,0 +1,535 @@
+name: Publish reviewed Windows release
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: english-reader-release-v0.3.0
+  cancel-in-progress: false
+
+# Immutable pins for the reviewed successful 0.3.0 push build.
+# No dispatch inputs, PAT, repository checkout, dependency installation, or build.
+env:
+  SOURCE_SHA: 'a3f5819fdc3fd4b55d59156cd44d61c2add99cf6'
+  SOURCE_RUN_ID: '38036985292'
+  SOURCE_RUN_ATTEMPT: '1'
+  SOURCE_ARTIFACT_ID: '11663589252'
+  SOURCE_ARTIFACT_SHA256: '72c98c8328b750833f74486b88c408c175fbbfd77e3c4096613534cfc73a4d0d'
+  GH_REPO: lzx955520/english-reader
+  GH_PROMPT_DISABLED: '1'
+
+jobs:
+  validate:
+    name: Validate reviewed CI artifacts (read only)
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'lzx955520/english-reader' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      inventory: ${{ steps.validate.outputs.inventory }}
+      vetted_artifact_id: ${{ steps.vetted.outputs.artifact-id }}
+    steps:
+      - name: Validate pinned CI and all release files without executing them
+        id: validate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, re, stat, subprocess, urllib.error, urllib.parse, urllib.request, zipfile
+          
+          REPO = "lzx955520/english-reader"
+          REPO_ID = 1411948569
+          VERSION = "0.3.0"
+          TAG = "v" + VERSION
+          SETUP = "English-Reader-0.3.0-x64-Setup.exe"
+          PORTABLE = "English-Reader-0.3.0-x64-Portable.exe"
+          NAMES = {SETUP, PORTABLE, "update-manifest.json", "SHA256SUMS.txt"}
+          LIMITS = {SETUP: 512 * 1024 * 1024, PORTABLE: 512 * 1024 * 1024,
+                    "update-manifest.json": 256 * 1024, "SHA256SUMS.txt": 4096}
+          SHA = os.environ["SOURCE_SHA"]
+          RUN = os.environ["SOURCE_RUN_ID"]
+          ATTEMPT = os.environ["SOURCE_RUN_ATTEMPT"]
+          if not re.fullmatch(r"[0-9a-f]{40}", SHA) or not re.fullmatch(r"[1-9][0-9]*", RUN):
+              raise RuntimeError("Replace the fail-closed source SHA and run ID pins after reviewing successful CI.")
+          if not re.fullmatch(r"[1-9][0-9]*", ATTEMPT):
+              raise RuntimeError("Invalid pinned CI attempt.")
+          if os.environ["GITHUB_REPOSITORY"] != REPO or os.environ["GITHUB_REF"] != "refs/heads/main":
+              raise RuntimeError("Only the fixed repository's main-branch manual workflow may publish.")
+          
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+          
+          opener = urllib.request.build_opener(NoRedirect)
+          def api(route, method="GET", payload=None, absent=False):
+              data = None if payload is None else json.dumps(payload).encode()
+              req = urllib.request.Request("https://api.github.com/repos/" + REPO + "/" + route,
+                  data=data, method=method, headers={
+                      "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "Content-Type": "application/json",
+                      "User-Agent": "English-Reader-Reviewed-Release"})
+              try:
+                  with opener.open(req, timeout=60) as response:
+                      raw = response.read(4 * 1024 * 1024 + 1)
+                      if len(raw) > 4 * 1024 * 1024:
+                          raise RuntimeError("GitHub metadata exceeds the limit.")
+                      return json.loads(raw)
+              except urllib.error.HTTPError as error:
+                  if absent and error.code == 404:
+                      error.close()
+                      return None
+                  error.close()
+                  raise RuntimeError("GitHub API request failed: HTTP " + str(error.code)) from None
+          
+          def check_run():
+              run = api("actions/runs/" + RUN)
+              expected = {"id": int(RUN), "name": "Build and test", "workflow_id": 379732547,
+                          "path": ".github/workflows/check.yml", "event": "push",
+                          "head_branch": "feat/windows-reader", "head_sha": SHA,
+                          "run_attempt": int(ATTEMPT), "status": "completed", "conclusion": "success"}
+              if any(run.get(key) != value for key, value in expected.items()):
+                  raise RuntimeError("The pinned CI run is not the exact approved successful push run.")
+              for field in ("repository", "head_repository"):
+                  if run.get(field, {}).get("id") != REPO_ID or run.get(field, {}).get("full_name") != REPO:
+                      raise RuntimeError("CI came from a different repository.")
+              return run
+          
+          def digest_file(file):
+              h = hashlib.sha256()
+              with file.open("rb") as stream:
+                  while chunk := stream.read(1024 * 1024):
+                      h.update(chunk)
+              return h.hexdigest()
+          
+          def check_files(folder):
+              entries = list(folder.iterdir())
+              if {p.name for p in entries} != NAMES or len(entries) != 4:
+                  raise RuntimeError("Exactly the four approved release files are required.")
+              inventory = {}
+              for file in entries:
+                  mode = file.lstat().st_mode
+                  size = file.stat().st_size
+                  if not stat.S_ISREG(mode) or file.is_symlink() or not 0 < size <= LIMITS[file.name]:
+                      raise RuntimeError("Invalid release-file type or size.")
+                  if file.name.endswith(".exe"):
+                      with file.open("rb") as stream:
+                          if stream.read(2) != b"MZ":
+                              raise RuntimeError("An executable lacks its Windows MZ header.")
+                  inventory[file.name] = {"size": size, "sha256": digest_file(file)}
+              def unique(pairs):
+                  result = {}
+                  for key, value in pairs:
+                      if key in result:
+                          raise RuntimeError("Duplicate JSON key.")
+                      result[key] = value
+                  return result
+              manifest = json.loads((folder / "update-manifest.json").read_text(encoding="utf-8"),
+                                    object_pairs_hook=unique)
+              expected = {"schemaVersion": 1, "version": VERSION, "platform": "win32", "arch": "x64",
+                          "installer": {"name": SETUP, **inventory[SETUP]}}
+              if manifest != expected or type(manifest.get("schemaVersion")) is not int:
+                  raise RuntimeError("Update manifest does not exactly describe the approved installer.")
+              if type(manifest["installer"].get("size")) is not int:
+                  raise RuntimeError("Manifest installer size must be an integer.")
+              rows = (folder / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines()
+              parsed = {}
+              for row in rows:
+                  match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", row)
+                  if not match or match[2] in parsed:
+                      raise RuntimeError("Malformed or duplicate SHA256SUMS row.")
+                  parsed[match[2]] = match[1]
+              expected_sums = {name: inventory[name]["sha256"] for name in NAMES - {"SHA256SUMS.txt"}}
+              if parsed != expected_sums:
+                  raise RuntimeError("SHA256SUMS must verify exactly the installer, portable app, and manifest.")
+              return inventory
+          
+          check_run()
+          jobs = api("actions/runs/" + RUN + "/attempts/" + ATTEMPT + "/jobs?per_page=100")
+          expected_jobs = {"checks", "windows-package", "dependency-audit"}
+          if (jobs.get("total_count") != 3 or len(jobs.get("jobs", [])) != 3
+              or {j.get("name") for j in jobs["jobs"]} != expected_jobs
+              or any(j.get("status") != "completed" or j.get("conclusion") != "success" for j in jobs["jobs"])):
+              raise RuntimeError("All three expected CI jobs must have completed successfully.")
+          package = api("contents/package.json?ref=" + SHA)
+          if package.get("encoding") != "base64" or package.get("size", 0) > 256 * 1024:
+              raise RuntimeError("Invalid source package metadata.")
+          if json.loads(base64.b64decode(package["content"])).get("version") != VERSION:
+              raise RuntimeError("The pinned source package is not version 0.3.0.")
+          listing = api("actions/runs/" + RUN + "/artifacts?per_page=100")
+          if listing.get("total_count", 101) > 100:
+              raise RuntimeError("Unexpected number of CI artifacts.")
+          matches = [a for a in listing.get("artifacts", []) if a.get("name") == "english-reader-windows-x64"]
+          if len(matches) != 1:
+              raise RuntimeError("Exactly one Windows build artifact is required.")
+          artifact = matches[0]
+          artifact_id = artifact.get("id")
+          if (str(artifact_id) != os.environ["SOURCE_ARTIFACT_ID"]
+              or artifact.get("digest") != "sha256:" + os.environ["SOURCE_ARTIFACT_SHA256"]
+              or artifact.get("size_in_bytes") != 195763491):
+              raise RuntimeError("Artifact ID, digest, or size differs from the explicitly reviewed build.")
+          archive_limit = sum(LIMITS.values()) + 1024 * 1024
+          if (type(artifact_id) is not int or artifact_id <= 0 or artifact.get("expired") is not False
+              or type(artifact.get("size_in_bytes")) is not int
+              or not 0 < artifact["size_in_bytes"] <= archive_limit
+              or not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact.get("digest", ""))):
+              raise RuntimeError("Invalid, expired, or oversized build artifact.")
+          origin = artifact.get("workflow_run", {})
+          for key, value in {"id": int(RUN), "repository_id": REPO_ID, "head_repository_id": REPO_ID,
+                             "head_branch": "feat/windows-reader", "head_sha": SHA}.items():
+              if origin.get(key) != value:
+                  raise RuntimeError("Artifact provenance does not match the approved source.")
+          
+          # The authenticated request is made only to the fixed GitHub API endpoint.
+          # Its signed storage redirect is downloaded separately, without Authorization.
+          req = urllib.request.Request(
+              "https://api.github.com/repos/" + REPO + "/actions/artifacts/" + str(artifact_id) + "/zip",
+              headers={"Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                       "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"})
+          try:
+              response = opener.open(req, timeout=60)
+              response.close()
+              raise RuntimeError("Expected GitHub's signed artifact download redirect.")
+          except urllib.error.HTTPError as response:
+              if response.code != 302:
+                  response.close()
+                  raise RuntimeError("Could not obtain the artifact download URL.") from None
+              location = response.headers.get("Location", "")
+              response.close()
+          url = urllib.parse.urlsplit(location)
+          host = url.hostname or ""
+          if (url.scheme != "https" or url.username or url.password or url.port not in (None, 443)
+              or url.fragment or not (host.endswith(".blob.core.windows.net") or host.endswith(".githubusercontent.com"))):
+              raise RuntimeError("Unexpected artifact storage destination.")
+          archive = pathlib.Path(os.environ["RUNNER_TEMP"]) / "reviewed-source-artifact.zip"
+          with opener.open(urllib.request.Request(location, headers={"Accept-Encoding": "identity"}), timeout=60) as response:
+              with archive.open("xb") as output:
+                  received = 0
+                  while chunk := response.read(1024 * 1024):
+                      received += len(chunk)
+                      if received > archive_limit:
+                          raise RuntimeError("Build artifact archive exceeds the limit.")
+                      output.write(chunk)
+          if "sha256:" + digest_file(archive) != artifact["digest"]:
+              raise RuntimeError("GitHub artifact archive digest mismatch.")
+          
+          folder = pathlib.Path("vetted")
+          folder.mkdir(mode=0o700)
+          with zipfile.ZipFile(archive) as bundle:
+              entries = bundle.infolist()
+              if len(entries) != 4 or {item.filename for item in entries} != NAMES:
+                  raise RuntimeError("Artifact ZIP must contain exactly four flat, approved file names.")
+              for item in entries:
+                  mode = item.external_attr >> 16
+                  if (item.is_dir() or item.flag_bits & 1 or stat.S_IFMT(mode) not in (0, stat.S_IFREG)
+                      or item.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+                      or not 0 < item.file_size <= LIMITS[item.filename]):
+                      raise RuntimeError("Invalid ZIP entry type, compression, or size.")
+                  # Never extract paths supplied by an archive or execute its contents.
+                  with bundle.open(item) as source, (folder / item.filename).open("xb") as target:
+                      received = 0
+                      while chunk := source.read(1024 * 1024):
+                          received += len(chunk)
+                          if received > LIMITS[item.filename]:
+                              raise RuntimeError("Expanded artifact exceeds its file-size limit.")
+                          target.write(chunk)
+                      if received != item.file_size:
+                          raise RuntimeError("Expanded artifact file size mismatch.")
+          inventory = check_files(folder)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("inventory=" + json.dumps(inventory, sort_keys=True, separators=(",", ":")) + "\n")
+          print("Verified the pinned successful CI run and all four release files.")
+          PY
+      - name: Transfer only the four validated files
+        id: vetted
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: reviewed-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            vetted/English-Reader-0.3.0-x64-Setup.exe
+            vetted/English-Reader-0.3.0-x64-Portable.exe
+            vetted/update-manifest.json
+            vetted/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+          overwrite: false
+
+  publish:
+    name: Publish only the validated release files
+    needs: validate
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'lzx955520/english-reader' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download the immutable validated artifact from this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.validate.outputs.vetted_artifact_id }}
+          path: vetted
+          merge-multiple: true
+      - name: Verify again, create draft, verify all uploads, then publish stable
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_INVENTORY: ${{ needs.validate.outputs.inventory }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, re, stat, subprocess, urllib.error, urllib.parse, urllib.request, zipfile
+          
+          REPO = "lzx955520/english-reader"
+          REPO_ID = 1411948569
+          VERSION = "0.3.0"
+          TAG = "v" + VERSION
+          SETUP = "English-Reader-0.3.0-x64-Setup.exe"
+          PORTABLE = "English-Reader-0.3.0-x64-Portable.exe"
+          NAMES = {SETUP, PORTABLE, "update-manifest.json", "SHA256SUMS.txt"}
+          LIMITS = {SETUP: 512 * 1024 * 1024, PORTABLE: 512 * 1024 * 1024,
+                    "update-manifest.json": 256 * 1024, "SHA256SUMS.txt": 4096}
+          SHA = os.environ["SOURCE_SHA"]
+          RUN = os.environ["SOURCE_RUN_ID"]
+          ATTEMPT = os.environ["SOURCE_RUN_ATTEMPT"]
+          if not re.fullmatch(r"[0-9a-f]{40}", SHA) or not re.fullmatch(r"[1-9][0-9]*", RUN):
+              raise RuntimeError("Replace the fail-closed source SHA and run ID pins after reviewing successful CI.")
+          if not re.fullmatch(r"[1-9][0-9]*", ATTEMPT):
+              raise RuntimeError("Invalid pinned CI attempt.")
+          if os.environ["GITHUB_REPOSITORY"] != REPO or os.environ["GITHUB_REF"] != "refs/heads/main":
+              raise RuntimeError("Only the fixed repository's main-branch manual workflow may publish.")
+          
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+          
+          opener = urllib.request.build_opener(NoRedirect)
+          def api(route, method="GET", payload=None, absent=False):
+              data = None if payload is None else json.dumps(payload).encode()
+              req = urllib.request.Request("https://api.github.com/repos/" + REPO + "/" + route,
+                  data=data, method=method, headers={
+                      "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "Content-Type": "application/json",
+                      "User-Agent": "English-Reader-Reviewed-Release"})
+              try:
+                  with opener.open(req, timeout=60) as response:
+                      raw = response.read(4 * 1024 * 1024 + 1)
+                      if len(raw) > 4 * 1024 * 1024:
+                          raise RuntimeError("GitHub metadata exceeds the limit.")
+                      return json.loads(raw)
+              except urllib.error.HTTPError as error:
+                  if absent and error.code == 404:
+                      error.close()
+                      return None
+                  error.close()
+                  raise RuntimeError("GitHub API request failed: HTTP " + str(error.code)) from None
+          
+          def check_run():
+              run = api("actions/runs/" + RUN)
+              expected = {"id": int(RUN), "name": "Build and test", "workflow_id": 379732547,
+                          "path": ".github/workflows/check.yml", "event": "push",
+                          "head_branch": "feat/windows-reader", "head_sha": SHA,
+                          "run_attempt": int(ATTEMPT), "status": "completed", "conclusion": "success"}
+              if any(run.get(key) != value for key, value in expected.items()):
+                  raise RuntimeError("The pinned CI run is not the exact approved successful push run.")
+              for field in ("repository", "head_repository"):
+                  if run.get(field, {}).get("id") != REPO_ID or run.get(field, {}).get("full_name") != REPO:
+                      raise RuntimeError("CI came from a different repository.")
+              return run
+          
+          def digest_file(file):
+              h = hashlib.sha256()
+              with file.open("rb") as stream:
+                  while chunk := stream.read(1024 * 1024):
+                      h.update(chunk)
+              return h.hexdigest()
+          
+          def check_files(folder):
+              entries = list(folder.iterdir())
+              if {p.name for p in entries} != NAMES or len(entries) != 4:
+                  raise RuntimeError("Exactly the four approved release files are required.")
+              inventory = {}
+              for file in entries:
+                  mode = file.lstat().st_mode
+                  size = file.stat().st_size
+                  if not stat.S_ISREG(mode) or file.is_symlink() or not 0 < size <= LIMITS[file.name]:
+                      raise RuntimeError("Invalid release-file type or size.")
+                  if file.name.endswith(".exe"):
+                      with file.open("rb") as stream:
+                          if stream.read(2) != b"MZ":
+                              raise RuntimeError("An executable lacks its Windows MZ header.")
+                  inventory[file.name] = {"size": size, "sha256": digest_file(file)}
+              def unique(pairs):
+                  result = {}
+                  for key, value in pairs:
+                      if key in result:
+                          raise RuntimeError("Duplicate JSON key.")
+                      result[key] = value
+                  return result
+              manifest = json.loads((folder / "update-manifest.json").read_text(encoding="utf-8"),
+                                    object_pairs_hook=unique)
+              expected = {"schemaVersion": 1, "version": VERSION, "platform": "win32", "arch": "x64",
+                          "installer": {"name": SETUP, **inventory[SETUP]}}
+              if manifest != expected or type(manifest.get("schemaVersion")) is not int:
+                  raise RuntimeError("Update manifest does not exactly describe the approved installer.")
+              if type(manifest["installer"].get("size")) is not int:
+                  raise RuntimeError("Manifest installer size must be an integer.")
+              rows = (folder / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines()
+              parsed = {}
+              for row in rows:
+                  match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", row)
+                  if not match or match[2] in parsed:
+                      raise RuntimeError("Malformed or duplicate SHA256SUMS row.")
+                  parsed[match[2]] = match[1]
+              expected_sums = {name: inventory[name]["sha256"] for name in NAMES - {"SHA256SUMS.txt"}}
+              if parsed != expected_sums:
+                  raise RuntimeError("SHA256SUMS must verify exactly the installer, portable app, and manifest.")
+              return inventory
+          
+          check_run()
+          folder = pathlib.Path("vetted")
+          inventory = check_files(folder)
+          if inventory != json.loads(os.environ["APPROVED_INVENTORY"]):
+              raise RuntimeError("The validated artifact changed between the read-only and publishing jobs.")
+          
+          # Refuse every existing release, including drafts. A failed upload leaves a draft
+          # for manual inspection; reruns never overwrite or delete it.
+          for page in range(1, 11):
+              releases = api("releases?per_page=100&page=" + str(page))
+              if not isinstance(releases, list):
+                  raise RuntimeError("Invalid GitHub release listing.")
+              if any(release.get("tag_name") == TAG for release in releases):
+                  raise RuntimeError("A v0.3.0 release already exists, possibly as a draft. Inspect it manually.")
+              if len(releases) < 100:
+                  break
+          else:
+              raise RuntimeError("Too many releases to establish safe absence.")
+          
+          def tag_commit():
+              ref = api("git/ref/tags/" + TAG, absent=True)
+              if ref is None:
+                  return None
+              if ref.get("ref") != "refs/tags/" + TAG:
+                  raise RuntimeError("Unexpected tag reference.")
+              obj = ref["object"]
+              for _ in range(5):
+                  if not re.fullmatch(r"[0-9a-f]{40}", obj.get("sha", "")):
+                      raise RuntimeError("Invalid tag object.")
+                  if obj.get("type") == "commit":
+                      return obj["sha"]
+                  if obj.get("type") != "tag":
+                      raise RuntimeError("Release tag does not point to a commit.")
+                  obj = api("git/tags/" + obj["sha"])["object"]
+              raise RuntimeError("Too many annotated tag layers.")
+          
+          existing = tag_commit()
+          if existing is None:
+              try:
+                  created = api("git/refs", "POST", {"ref": "refs/tags/" + TAG, "sha": SHA})
+              except RuntimeError as error:
+                  raise RuntimeError(
+                      "Could not create the exact release tag with the temporary contents:write token. "
+                      "GitHub may require the owner to create v0.3.0 at " + SHA + " manually first. "
+                      "No broader token, permission fallback, or branch change will be attempted. " + str(error)) from None
+              if created.get("object", {}).get("sha") != SHA:
+                  raise RuntimeError("Created tag does not match the approved source.")
+          elif existing != SHA:
+              raise RuntimeError("Existing v0.3.0 tag points to a different commit; refusing to change it.")
+          if tag_commit() != SHA:
+              raise RuntimeError("Release tag changed before release creation.")
+          
+          body = (
+              "English Reader 0.3.0 — Windows x64\n\n"
+              "Manual installation only. Setup and Portable executables are unsigned. "
+              "SHA-256 checks verify file consistency, not independent publisher identity. "
+              "Back up your reading data before upgrading and follow Windows security prompts; "
+              "do not disable operating-system protections.\n\n"
+              "This release is a free, non-profit tool. Source license: MIT.\n\n"
+              "Preview-quality, unsigned Windows build. CI passed 121 unit tests and 4 package-policy "
+              "tests on Linux and Windows, plus 5 offline UI scenarios against the Linux root/staged "
+              "app and the Windows staged app. The installed EXE, NSIS install/uninstall, DPAPI, "
+              "system speech, and a real 0.2-to-0.3 upgrade preserving user data have NOT been tested. "
+              "Staged-app tests do not establish installed-app or upgrade safety.\n\n"
+              "Dependency audit (2026-10-10) still reports 13 findings: 2 critical, 2 high, and 9 moderate. "
+              "The critical findings involve Vitest/tinypool development tooling; a high-severity "
+              "Electron runtime finding remains. Dependencies were not upgraded in this release scope. "
+              "The audit CI job is report-only: a successful job does NOT mean a clean security audit.\n\n"
+              "Reviewed source commit: " + SHA + "\n"
+              "Successful Build and test run: https://github.com/" + REPO + "/actions/runs/" + RUN + "\n"
+              "Update checks and downloads are manual; the app never launches the installer automatically.\n"
+          )
+          # The tag was verified above. Do not pass another target_commitish or move it.
+          release = api("releases", "POST", {"tag_name": TAG, "name": "English Reader 0.3.0",
+              "body": body, "draft": True, "prerelease": False, "make_latest": "false",
+              "generate_release_notes": False})
+          release_id = release.get("id")
+          if (type(release_id) is not int or release_id <= 0 or release.get("tag_name") != TAG
+              or release.get("draft") is not True or release.get("prerelease") is not False):
+              raise RuntimeError("Unexpected draft release response; inspect GitHub before retrying.")
+          print("Created draft release " + str(release_id) + "; no public release has been published.")
+          
+          def verify_assets(assets):
+              if len(assets) != 4 or {item.get("name") for item in assets} != NAMES:
+                  raise RuntimeError("Draft does not contain exactly the four approved assets.")
+              for asset in assets:
+                  expected = inventory[asset["name"]]
+                  if (asset.get("state") != "uploaded" or asset.get("size") != expected["size"]
+                      or asset.get("digest") != "sha256:" + expected["sha256"]):
+                      raise RuntimeError("Uploaded release asset size, state, or SHA-256 digest mismatch.")
+          
+          for name in sorted(NAMES):
+              content_type = "application/octet-stream" if name.endswith(".exe") else (
+                  "application/json" if name.endswith(".json") else "text/plain")
+              endpoint = ("https://uploads.github.com/repos/" + REPO + "/releases/" + str(release_id)
+                          + "/assets?name=" + urllib.parse.quote(name, safe=""))
+              # No shell expansion, checkout, package installation, or downloaded executable is used.
+              result = subprocess.run(["gh", "api", "--method", "POST", endpoint,
+                  "-H", "Accept: application/vnd.github+json",
+                  "-H", "X-GitHub-Api-Version: 2022-11-28",
+                  "-H", "Content-Type: " + content_type,
+                  "--input", str(folder / name)], check=True, capture_output=True, text=True)
+              uploaded = json.loads(result.stdout)
+              if (uploaded.get("name") != name or uploaded.get("state") != "uploaded"
+                  or uploaded.get("size") != inventory[name]["size"]
+                  or uploaded.get("digest") != "sha256:" + inventory[name]["sha256"]):
+                  raise RuntimeError("Upload verification failed; the release remains a draft.")
+          
+          draft = api("releases/" + str(release_id))
+          if draft.get("draft") is not True or draft.get("tag_name") != TAG or draft.get("prerelease") is not False:
+              raise RuntimeError("Draft state changed; refusing to publish.")
+          verify_assets(api("releases/" + str(release_id) + "/assets?per_page=100"))
+          if tag_commit() != SHA:
+              raise RuntimeError("Release tag changed; the release remains a draft.")
+          published = api("releases/" + str(release_id), "PATCH",
+                          {"draft": False, "prerelease": False, "make_latest": "true"})
+          if (published.get("id") != release_id or published.get("draft") is not False
+              or published.get("prerelease") is not False or published.get("tag_name") != TAG):
+              raise RuntimeError("Publishing result was not confirmed. Inspect the release before retrying.")
+          final = api("releases/" + str(release_id))
+          verify_assets(api("releases/" + str(release_id) + "/assets?per_page=100"))
+          latest = api("releases/latest")
+          if (final.get("id") != release_id or final.get("tag_name") != TAG
+              or final.get("draft") is not False or final.get("prerelease") is not False
+              or latest.get("id") != release_id or tag_commit() != SHA):
+              raise RuntimeError("Post-publication verification failed. Inspect the published release.")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("Published and verified [English Reader 0.3.0](https://github.com/" + REPO
+                            + "/releases/tag/" + TAG + ") with exactly four assets.\n")
+          print("Published and verified v0.3.0 as the latest stable release.")
+          PY
