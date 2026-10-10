@@ -266,7 +266,7 @@ test("update controls show installed version and unpublished channel without cha
   const before = await page.evaluate(() => window.reader.state());
   await page.getByRole("button", { name: "设置与数据" }).click();
   const updates = page.getByRole("region", { name: "应用更新" });
-  await expect(updates).toContainText("当前版本：0.3.1");
+  await expect(updates).toContainText("当前版本：" + JSON.parse(fs.readFileSync(path.resolve(process.env.READER_E2E_APP || ".", "package.json"), "utf8")).version);
   await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await expect(updates).toContainText("公开更新渠道尚未发布");
   await expect(page.getByRole("button", { name: "下载安装包", exact: true })).toHaveCount(0);
