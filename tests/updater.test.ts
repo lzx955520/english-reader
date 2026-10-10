@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { UpdateManager, stableVersion, isNewer, validateManifest, UPDATE_REPOSITORY } from "../electron/updater";
+import { UpdateManager, stableVersion, isNewer, validateManifest, UPDATE_REPOSITORY, UPDATE_MANIFEST_URL } from "../electron/updater";
 
 const folders: string[] = [];
 afterEach(async () => { for (const folder of folders.splice(0)) await fs.rm(folder, { recursive: true, force: true }); });
@@ -13,16 +13,11 @@ const version = "0.4.0";
 const name = "English-Reader-" + version + "-x64-Setup.exe";
 const root = "https://github.com/" + UPDATE_REPOSITORY + "/releases/download/v" + version + "/";
 const manifest = { schemaVersion: 1, version, platform: "win32", arch: "x64", installer: { name, size: payload.length, sha256: digest } };
-const release = { tag_name: "v" + version, draft: false, prerelease: false, assets: [
-  { name: "update-manifest.json", size: 250, browser_download_url: root + "update-manifest.json" },
-  { name, size: payload.length, browser_download_url: root + name },
-] };
 async function fixture(overrides: Record<string, unknown> = {}, fetchOverride?: (url: string, init?: RequestInit) => Promise<Response>) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "reader-update-test-"));
   folders.push(directory);
   const reveal = vi.fn();
   const fetcher = vi.fn(fetchOverride || (async (url: string) => {
-    if (url.endsWith("/latest")) return Response.json(release);
     if (url.endsWith(".json")) return Response.json(manifest);
     return new Response(new Uint8Array(payload));
   }));
@@ -63,24 +58,20 @@ describe("manual update trust boundary", () => {
     expect((await manager.check()).message).toContain("尚未发布");
     expect(manager.status().phase).toBe("error");
   });
-  it("rejects prereleases and does not offer old or equal releases", async () => {
-    for (const changed of [{ ...release, prerelease: true }, { ...release, draft: true }, { ...release, tag_name: "v0.4.0-beta" }]) {
-      const { manager } = await fixture({}, async () => Response.json(changed));
+  it("rejects malformed versions and never offers equal or lower releases", async () => {
+    for (const bad of ["0.4.0-beta", "../0.4.0", undefined]) {
+      const { manager } = await fixture({}, async () => Response.json({ ...manifest, version: bad }));
       expect((await manager.check()).phase).toBe("error");
     }
-    const { manager, fetcher } = await fixture({}, async () => Response.json({ ...release, tag_name: "v0.3.0" }));
-    expect((await manager.check()).phase).toBe("current");
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    for (const currentVersion of [version, "0.5.0"]) {
+      const { manager } = await fixture({ currentVersion });
+      expect((await manager.check()).phase).toBe("current");
+    }
   });
-  it("rejects arbitrary asset URLs and duplicate names", async () => {
-    for (const assets of [
-      release.assets.map(a => ({ ...a, browser_download_url: "https://attacker.invalid/" + a.name })),
-      [...release.assets, release.assets[0]],
-    ]) {
-      const { manager, fetcher } = await fixture({}, async () => Response.json({ ...release, assets }));
-      expect((await manager.check()).phase).toBe("error");
-      expect(fetcher).toHaveBeenCalledTimes(1);
-    }
+  it("rejects a latest/pinned manifest mismatch", async () => {
+    const { manager } = await fixture({}, async url => Response.json(url === UPDATE_MANIFEST_URL ? manifest :
+      { ...manifest, installer: { ...manifest.installer, sha256: "a".repeat(64) } }));
+    expect((await manager.check()).phase).toBe("error");
   });
   it("rejects off-host and insecure redirects before fetching them", async () => {
     for (const location of ["https://evil.invalid/file", "http://release-assets.githubusercontent.com/file", "https://user:pass@release-assets.githubusercontent.com/file"]) {
@@ -113,7 +104,7 @@ describe("manual update trust boundary", () => {
   it("deletes partial or corrupt files and never reveals them", async () => {
     for (const bad of [Buffer.from("bad"), Buffer.alloc(payload.length, 1), Buffer.alloc(payload.length + 1)]) {
       const { manager, directory, reveal } = await fixture({}, async url =>
-        url.endsWith("/latest") ? Response.json(release) : url.endsWith(".json") ? Response.json(manifest) : new Response(new Uint8Array(bad)));
+        url.endsWith(".json") ? Response.json(manifest) : new Response(new Uint8Array(bad)));
       await manager.check();
       expect((await manager.download()).phase).toBe("error");
       expect(await fs.readdir(directory)).toEqual([]);
@@ -128,7 +119,7 @@ describe("manual update trust boundary", () => {
         first = false;
         return new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(Error("cancelled")), { once: true }));
       }
-      return url.endsWith("/latest") ? Response.json(release) : Response.json(manifest);
+      return Response.json(manifest);
     });
     const pending = manager.check();
     expect((await manager.check()).phase).toBe("checking");
@@ -141,8 +132,7 @@ describe("manual update trust boundary", () => {
     let started!: () => void;
     const began = new Promise<void>(resolve => { started = resolve; });
     const { manager, directory } = await fixture({}, async (url, init) => {
-      if (url.endsWith("/latest")) return Response.json(release);
-      if (url.endsWith(".json")) return Response.json(manifest);
+        if (url.endsWith(".json")) return Response.json(manifest);
       started();
       return new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(Error("cancelled")), { once: true }));
     });
@@ -182,5 +172,81 @@ it("failed network checks are retryable without automatic retries", async () => 
   expect((await manager.check()).phase).toBe("error");
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect((await manager.check()).phase).toBe("error");
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
+
+describe("public metadata, cache and rate-limit handling", () => {
+  it("uses documented public assets only, caches success for five minutes", async () => {
+    let now = 1000;
+    const { manager, fetcher } = await fixture({ now: () => now });
+    await manager.check();
+    expect(fetcher.mock.calls.map(c => c[0])).toEqual([UPDATE_MANIFEST_URL, root + "update-manifest.json"]);
+    expect((await manager.check()).message).toContain("5 分钟");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    now += 300000;
+    await manager.check();
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+  it("follows only a stable manifest redirect within this publisher", async () => {
+    const { manager } = await fixture({}, async url => url === UPDATE_MANIFEST_URL ?
+      new Response(null, { status: 302, headers: { location: root + "update-manifest.json" } }) : Response.json(manifest));
+    expect((await manager.check()).phase).toBe("available");
+    for (const location of [root.replace(UPDATE_REPOSITORY, "other/repo") + "update-manifest.json",
+      root + name, root.replace("v0.4.0", "v0.4.0-beta") + "update-manifest.json", root + "update-manifest.json?x=1"]) {
+      const { manager, fetcher } = await fixture({}, async () => new Response(null, { status: 302, headers: { location } }));
+      expect((await manager.check()).phase).toBe("error");
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    }
+  });
+  it.each([
+    [429, { "retry-after": "120" }, 120000],
+    [403, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1300" }, 300000],
+    [429, { "retry-after": new Date(1120000).toUTCString() }, 120000],
+    [429, { "retry-after": "bad", "x-ratelimit-reset": "bad" }, 60000],
+    [429, { "retry-after": "0" }, 60000],
+  ])("honors %s rate cooldown without retrying or alternate endpoints", async (status, headers, duration) => {
+    let now = 1000000;
+    const { manager, fetcher } = await fixture({ now: () => now }, async () => new Response(null, { status, headers: headers as Record<string,string> }));
+    expect((await manager.check()).message).toContain("受限");
+    now += duration - 1;
+    await manager.check(); await manager.download();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    now++;
+    await manager.check();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it("does not claim a bare 403 proves quota exhaustion", async () => {
+    const { manager, fetcher } = await fixture({}, async () => new Response(null, { status: 403 }));
+    expect((await manager.check()).message).toContain("不一定");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("does not cache malformed metadata or cancellation", async () => {
+    const { manager, fetcher } = await fixture({}, async () => Response.json({ ...manifest, installer: { ...manifest.installer, size: -1 } }));
+    await manager.check(); await manager.check();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect((await manager.download()).phase).toBe("error");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it("keeps an already verified download revealable on a cached check", async () => {
+    const { manager } = await fixture();
+    await manager.check(); await manager.download();
+    expect((await manager.check()).phase).toBe("downloaded");
+    expect(await manager.reveal()).toBe(true);
+  });
+});
+
+it("starts relative Retry-After when the response arrives, not before a slow request", async () => {
+  let now = 1000000;
+  const { manager, fetcher } = await fixture({ now: () => now }, async () => {
+    now += 20000;
+    return new Response(null, { status: 429, headers: { "retry-after": "120" } });
+  });
+  await manager.check();
+  now += 119999;
+  await manager.check();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  now++;
+  await manager.check();
   expect(fetcher).toHaveBeenCalledTimes(2);
 });
