@@ -6,17 +6,17 @@ on:
 permissions: {}
 
 concurrency:
-  group: english-reader-release-v0.3.0
+  group: english-reader-release-v0.3.1
   cancel-in-progress: false
 
-# Immutable pins for the reviewed successful 0.3.0 push build.
+# Immutable pins for the reviewed successful 0.3.1 push build.
 # No dispatch inputs, PAT, repository checkout, dependency installation, or build.
 env:
-  SOURCE_SHA: 'a3f5819fdc3fd4b55d59156cd44d61c2add99cf6'
-  SOURCE_RUN_ID: '38036985292'
+  SOURCE_SHA: '55260e7029850bee89647d51750381fdfa225775'
+  SOURCE_RUN_ID: '38039612989'
   SOURCE_RUN_ATTEMPT: '1'
-  SOURCE_ARTIFACT_ID: '11663589252'
-  SOURCE_ARTIFACT_SHA256: '72c98c8328b750833f74486b88c408c175fbbfd77e3c4096613534cfc73a4d0d'
+  SOURCE_ARTIFACT_ID: '11664604105'
+  SOURCE_ARTIFACT_SHA256: 'd7c7041881c6e53418a540f2efe49a554e768f1c968b795b5c6d340a038796d1'
   GH_REPO: lzx955520/english-reader
   GH_PROMPT_DISABLED: '1'
 
@@ -48,10 +48,10 @@ jobs:
           
           REPO = "lzx955520/english-reader"
           REPO_ID = 1411948569
-          VERSION = "0.3.0"
+          VERSION = "0.3.1"
           TAG = "v" + VERSION
-          SETUP = "English-Reader-0.3.0-x64-Setup.exe"
-          PORTABLE = "English-Reader-0.3.0-x64-Portable.exe"
+          SETUP = "English-Reader-0.3.1-x64-Setup.exe"
+          PORTABLE = "English-Reader-0.3.1-x64-Portable.exe"
           NAMES = {SETUP, PORTABLE, "update-manifest.json", "SHA256SUMS.txt"}
           LIMITS = {SETUP: 512 * 1024 * 1024, PORTABLE: 512 * 1024 * 1024,
                     "update-manifest.json": 256 * 1024, "SHA256SUMS.txt": 4096}
@@ -96,7 +96,7 @@ jobs:
               run = api("actions/runs/" + RUN)
               expected = {"id": int(RUN), "name": "Build and test", "workflow_id": 379732547,
                           "path": ".github/workflows/check.yml", "event": "push",
-                          "head_branch": "feat/windows-reader", "head_sha": SHA,
+                          "head_branch": "feat/session-ai-consent", "head_sha": SHA,
                           "run_attempt": int(ATTEMPT), "status": "completed", "conclusion": "success"}
               if any(run.get(key) != value for key, value in expected.items()):
                   raise RuntimeError("The pinned CI run is not the exact approved successful push run.")
@@ -156,16 +156,16 @@ jobs:
           
           check_run()
           jobs = api("actions/runs/" + RUN + "/attempts/" + ATTEMPT + "/jobs?per_page=100")
-          expected_jobs = {"checks", "windows-package", "dependency-audit"}
-          if (jobs.get("total_count") != 3 or len(jobs.get("jobs", [])) != 3
+          expected_jobs = {"checks", "windows-package", "dependency-audit", "public-update-smoke"}
+          if (jobs.get("total_count") != 4 or len(jobs.get("jobs", [])) != 4
               or {j.get("name") for j in jobs["jobs"]} != expected_jobs
               or any(j.get("status") != "completed" or j.get("conclusion") != "success" for j in jobs["jobs"])):
-              raise RuntimeError("All three expected CI jobs must have completed successfully.")
+              raise RuntimeError("All four expected CI jobs must have completed successfully.")
           package = api("contents/package.json?ref=" + SHA)
           if package.get("encoding") != "base64" or package.get("size", 0) > 256 * 1024:
               raise RuntimeError("Invalid source package metadata.")
           if json.loads(base64.b64decode(package["content"])).get("version") != VERSION:
-              raise RuntimeError("The pinned source package is not version 0.3.0.")
+              raise RuntimeError("The pinned source package is not version 0.3.1.")
           listing = api("actions/runs/" + RUN + "/artifacts?per_page=100")
           if listing.get("total_count", 101) > 100:
               raise RuntimeError("Unexpected number of CI artifacts.")
@@ -176,7 +176,7 @@ jobs:
           artifact_id = artifact.get("id")
           if (str(artifact_id) != os.environ["SOURCE_ARTIFACT_ID"]
               or artifact.get("digest") != "sha256:" + os.environ["SOURCE_ARTIFACT_SHA256"]
-              or artifact.get("size_in_bytes") != 195763491):
+              or artifact.get("size_in_bytes") != 195765987):
               raise RuntimeError("Artifact ID, digest, or size differs from the explicitly reviewed build.")
           archive_limit = sum(LIMITS.values()) + 1024 * 1024
           if (type(artifact_id) is not int or artifact_id <= 0 or artifact.get("expired") is not False
@@ -186,7 +186,7 @@ jobs:
               raise RuntimeError("Invalid, expired, or oversized build artifact.")
           origin = artifact.get("workflow_run", {})
           for key, value in {"id": int(RUN), "repository_id": REPO_ID, "head_repository_id": REPO_ID,
-                             "head_branch": "feat/windows-reader", "head_sha": SHA}.items():
+                             "head_branch": "feat/session-ai-consent", "head_sha": SHA}.items():
               if origin.get(key) != value:
                   raise RuntimeError("Artifact provenance does not match the approved source.")
           
@@ -256,8 +256,8 @@ jobs:
         with:
           name: reviewed-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            vetted/English-Reader-0.3.0-x64-Setup.exe
-            vetted/English-Reader-0.3.0-x64-Portable.exe
+            vetted/English-Reader-0.3.1-x64-Setup.exe
+            vetted/English-Reader-0.3.1-x64-Portable.exe
             vetted/update-manifest.json
             vetted/SHA256SUMS.txt
           if-no-files-found: error
@@ -296,10 +296,10 @@ jobs:
           
           REPO = "lzx955520/english-reader"
           REPO_ID = 1411948569
-          VERSION = "0.3.0"
+          VERSION = "0.3.1"
           TAG = "v" + VERSION
-          SETUP = "English-Reader-0.3.0-x64-Setup.exe"
-          PORTABLE = "English-Reader-0.3.0-x64-Portable.exe"
+          SETUP = "English-Reader-0.3.1-x64-Setup.exe"
+          PORTABLE = "English-Reader-0.3.1-x64-Portable.exe"
           NAMES = {SETUP, PORTABLE, "update-manifest.json", "SHA256SUMS.txt"}
           LIMITS = {SETUP: 512 * 1024 * 1024, PORTABLE: 512 * 1024 * 1024,
                     "update-manifest.json": 256 * 1024, "SHA256SUMS.txt": 4096}
@@ -344,7 +344,7 @@ jobs:
               run = api("actions/runs/" + RUN)
               expected = {"id": int(RUN), "name": "Build and test", "workflow_id": 379732547,
                           "path": ".github/workflows/check.yml", "event": "push",
-                          "head_branch": "feat/windows-reader", "head_sha": SHA,
+                          "head_branch": "feat/session-ai-consent", "head_sha": SHA,
                           "run_attempt": int(ATTEMPT), "status": "completed", "conclusion": "success"}
               if any(run.get(key) != value for key, value in expected.items()):
                   raise RuntimeError("The pinned CI run is not the exact approved successful push run.")
@@ -415,7 +415,7 @@ jobs:
               if not isinstance(releases, list):
                   raise RuntimeError("Invalid GitHub release listing.")
               if any(release.get("tag_name") == TAG for release in releases):
-                  raise RuntimeError("A v0.3.0 release already exists, possibly as a draft. Inspect it manually.")
+                  raise RuntimeError("A v0.3.1 release already exists, possibly as a draft. Inspect it manually.")
               if len(releases) < 100:
                   break
           else:
@@ -445,26 +445,31 @@ jobs:
               except RuntimeError as error:
                   raise RuntimeError(
                       "Could not create the exact release tag with the temporary contents:write token. "
-                      "GitHub may require the owner to create v0.3.0 at " + SHA + " manually first. "
+                      "GitHub may require the owner to create v0.3.1 at " + SHA + " manually first. "
                       "No broader token, permission fallback, or branch change will be attempted. " + str(error)) from None
               if created.get("object", {}).get("sha") != SHA:
                   raise RuntimeError("Created tag does not match the approved source.")
           elif existing != SHA:
-              raise RuntimeError("Existing v0.3.0 tag points to a different commit; refusing to change it.")
+              raise RuntimeError("Existing v0.3.1 tag points to a different commit; refusing to change it.")
           if tag_commit() != SHA:
               raise RuntimeError("Release tag changed before release creation.")
           
           body = (
-              "English Reader 0.3.0 — Windows x64\n\n"
+              "English Reader 0.3.1 — Windows x64\n\n"
+              "New in 0.3.1: optional session-only AI consent for manually requested AI actions. "
+              "It starts off, requires a native confirmation before enabling, is revocable, and resets "
+              "when the app exits. Provider, model, endpoint, key changes or backup restoration revoke it. "
+              "It does not send requests automatically; turning it off cancels in-flight requests, "
+              "though a provider may already have charged for them. No consent is stored in backups.\n\n"
               "Manual installation only. Setup and Portable executables are unsigned. "
               "SHA-256 checks verify file consistency, not independent publisher identity. "
               "Back up your reading data before upgrading and follow Windows security prompts; "
               "do not disable operating-system protections.\n\n"
               "This release is a free, non-profit tool. Source license: MIT.\n\n"
-              "Preview-quality, unsigned Windows build. CI passed 121 unit tests and 4 package-policy "
-              "tests on Linux and Windows, plus 5 offline UI scenarios against the Linux root/staged "
+              "Preview-quality, unsigned Windows build. CI passed 124 unit tests and 4 package-policy "
+              "tests on Linux and Windows, plus 8 offline UI scenarios against the Linux root/staged "
               "app and the Windows staged app. The installed EXE, NSIS install/uninstall, DPAPI, "
-              "system speech, and a real 0.2-to-0.3 upgrade preserving user data have NOT been tested. "
+              "system speech, and real installed upgrades preserving user data have NOT been tested. "
               "Staged-app tests do not establish installed-app or upgrade safety.\n\n"
               "Dependency audit (2026-10-10) still reports 13 findings: 2 critical, 2 high, and 9 moderate. "
               "The critical findings involve Vitest/tinypool development tooling; a high-severity "
@@ -475,7 +480,7 @@ jobs:
               "Update checks and downloads are manual; the app never launches the installer automatically.\n"
           )
           # The tag was verified above. Do not pass another target_commitish or move it.
-          release = api("releases", "POST", {"tag_name": TAG, "name": "English Reader 0.3.0",
+          release = api("releases", "POST", {"tag_name": TAG, "name": "English Reader 0.3.1",
               "body": body, "draft": True, "prerelease": False, "make_latest": "false",
               "generate_release_notes": False})
           release_id = release.get("id")
@@ -529,7 +534,7 @@ jobs:
               or latest.get("id") != release_id or tag_commit() != SHA):
               raise RuntimeError("Post-publication verification failed. Inspect the published release.")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-              summary.write("Published and verified [English Reader 0.3.0](https://github.com/" + REPO
+              summary.write("Published and verified [English Reader 0.3.1](https://github.com/" + REPO
                             + "/releases/tag/" + TAG + ") with exactly four assets.\n")
-          print("Published and verified v0.3.0 as the latest stable release.")
+          print("Published and verified v0.3.1 as the latest stable release.")
           PY
