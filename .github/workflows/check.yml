@@ -1,0 +1,92 @@
+name: Build and test
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run test:package
+      - run: npm run licenses
+      - run: xvfb-run -a npm run test:ui
+      - run: npm run package:prepare
+      - name: Test staged runtime offline
+        run: READER_E2E_APP=release/app xvfb-run -a npx --no-install playwright test
+  windows-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:package
+      - run: npm run dist:win
+      - name: Test Windows staged runtime offline
+        env:
+          READER_E2E_APP: release/app
+        run: npx --no-install playwright test
+      - name: Validate packaged application privacy
+        run: node scripts/package-policy.cjs release/win-unpacked/resources/app.asar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: english-reader-windows-x64
+          path: |
+            release/English-Reader-0.3.0-x64-Setup.exe
+            release/English-Reader-0.3.0-x64-Portable.exe
+            release/update-manifest.json
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Capture dependency audit report
+        shell: bash
+        run: |
+          set +e
+          npm audit --json > npm-audit.json
+          audit_status=$?
+          set -e
+          cat npm-audit.json
+          node -e "const r = require('./npm-audit.json'); if (r.error || !r.metadata?.vulnerabilities || !r.vulnerabilities) process.exit(1)"
+          if [ "$audit_status" -gt 1 ]; then exit "$audit_status"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-audit-report
+          path: npm-audit.json
+          if-no-files-found: error
+          retention-days: 7
+
+  public-update-smoke:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Read-only public updater check and verified download
+        run: node scripts/check-public-update.mjs
