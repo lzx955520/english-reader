@@ -3,6 +3,11 @@ import type { ReaderAPI } from "../src/types";
 const invoke = (channel: string, ...args: unknown[]) =>
   ipcRenderer.invoke(channel, ...args);
 const api: ReaderAPI = {
+  updateStatus: () => invoke("updateStatus"),
+  checkUpdate: () => invoke("checkUpdate"),
+  downloadUpdate: () => invoke("downloadUpdate"),
+  cancelUpdate: () => invoke("cancelUpdate"),
+  revealUpdate: () => invoke("revealUpdate"),
   state: () => invoke("state"),
   refresh: (force) => invoke("refresh", force),
   cancel: (id) => invoke("cancel", id),

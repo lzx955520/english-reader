@@ -1,6 +1,6 @@
 {
   "name": "english-reader",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "每日英语精读与间隔复习桌面应用",
   "author": "english-reader contributors",
@@ -13,10 +13,13 @@
     "test": "vitest run",
     "test:ui": "npm run build && playwright test",
     "licenses": "node scripts/licenses.mjs",
-    "dist:win": "npm run build && npm run licenses && electron-builder --win nsis portable --x64 --publish never",
-    "dist:linux": "npm run build && electron-builder --linux dir --publish never",
+    "dist:win": "npm run package:prepare && electron-builder --win nsis portable --x64 --publish never && node scripts/package-artifacts.cjs",
+    "dist:linux": "npm run package:prepare && electron-builder --linux dir --publish never",
     "test:live": "npm run build && node scripts/check-live-news.cjs",
-    "dist:portable": "npm run build && npm run licenses && electron-builder --win portable --x64 --publish never"
+    "dist:portable": "npm run package:prepare && electron-builder --win portable --x64 --publish never && node scripts/package-artifacts.cjs --portable",
+    "test:package": "node --test scripts/package-policy.test.cjs",
+    "package:prepare": "npm run build && npm run licenses && node scripts/prepare-package.cjs",
+    "package:privacy": "node scripts/package-policy.cjs"
   },
   "dependencies": {
     "react": "^19.2.0",
@@ -45,18 +48,32 @@
     "appId": "com.englishreader.desktop",
     "productName": "English Reader",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "app": "release/app"
     },
     "files": [
-      "dist/**/*",
-      "dist-electron/**/*",
-      "assets/**/*",
-      "licenses/**/*",
+      "dist/index.html",
+      "dist/assets/**/*",
+      "dist-electron/*.cjs",
+      "assets/classics.json",
+      "assets/dictionary.sqlite",
+      "assets/dictionary-provenance.txt",
+      "licenses/dependencies/*.txt",
+      "licenses/ECDICT-MIT.txt",
+      "licenses/GUTENBERG.txt",
       "THIRD_PARTY_NOTICES.md",
       "package.json",
       "LICENSE",
-      "README.md",
-      "docs/**/*"
+      "node_modules/sql.js/package.json",
+      "node_modules/sql.js/LICENSE",
+      "node_modules/sql.js/dist/sql-wasm.js",
+      "node_modules/sql.js/dist/sql-wasm.wasm",
+      "!**/*.map",
+      "!**/*.ts",
+      "!**/*.tsx",
+      "!**/README*",
+      "!docs/**/*",
+      "!licenses/development.json"
     ],
     "win": {
       "target": [
@@ -74,6 +91,10 @@
     },
     "portable": {
       "artifactName": "English-Reader-${version}-${arch}-Portable.${ext}"
-    }
+    },
+    "asar": true,
+    "npmRebuild": false,
+    "publish": null,
+    "afterPack": "scripts/package-policy.cjs"
   }
 }

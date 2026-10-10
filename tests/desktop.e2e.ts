@@ -261,3 +261,18 @@ test("source diagnostics retain cache context and give per-source offline failur
   await expect(page.locator(".source-diagnostics .source-status.failed").first()).toBeVisible();
   expect((await page.evaluate(() => window.reader.state())).articles.some((a) => a.kind === "news")).toBe(false);
 });
+
+test("update controls show installed version and unpublished channel without changing learning data", async () => {
+  const before = await page.evaluate(() => window.reader.state());
+  await page.getByRole("button", { name: "设置与数据" }).click();
+  const updates = page.getByRole("region", { name: "应用更新" });
+  await expect(updates).toContainText("当前版本：0.3.0");
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await expect(updates).toContainText("公开更新渠道尚未发布");
+  await expect(page.getByRole("button", { name: "下载安装包", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "关闭设置" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "设置与数据" }).click();
+  await expect(updates).toContainText("公开更新渠道尚未发布");
+  expect((await page.evaluate(() => window.reader.state())).cards).toEqual(before.cards);
+});

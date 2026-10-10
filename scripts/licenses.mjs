@@ -29,7 +29,7 @@ for (const [name, item] of Object.entries(result)) {
   else throw Error("License text missing: " + name);
 }
 notices +=
-  "\n## 桌面运行时\n\nElectron 39：MIT；包含 Chromium、Node.js 等第三方组件，其 LICENSE 与 LICENSES.chromium.html 由 electron-builder 保留在安装包内。构建工具不随应用分发；开发依赖完整许可证清单见 licenses/development.json。\n";
+  "\n## 桌面运行时\n\nElectron 39：MIT；包含 Chromium、Node.js 等第三方组件，其 LICENSE 与 LICENSES.chromium.html 由 electron-builder 保留在安装包内。构建工具不随应用分发；开发依赖完整许可证清单仅在源代码仓库的 licenses/development.json 中提供，不包含在运行包内。\n";
 notices +=
   "\n## 词典\n\nECDICT（skywind3000/ECDICT）：上游仓库声明 MIT。保留 licenses/ECDICT-MIT.txt；固定提交、原始 CSV SHA-256 和筛选条件见 assets/dictionary-provenance.txt。48,185 个词条及词形映射，仅按原始字段筛选，未修改释义。上游说明词条来自多个历史词典及贡献，MIT 为仓库声明，不代表对每条历史来源作独立权利担保。\n";
 notices +=

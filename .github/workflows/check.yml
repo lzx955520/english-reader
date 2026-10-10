@@ -15,6 +15,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+      - run: npm run test:package
       - run: npm run licenses
       - run: xvfb-run -a npm run test:ui
   windows-package:
@@ -26,11 +27,19 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - run: npm run test:package
       - run: npm run dist:win
+      - name: Validate packaged application privacy
+        run: node scripts/package-policy.cjs release/win-unpacked/resources/app.asar
       - uses: actions/upload-artifact@v4
         with:
           name: english-reader-windows-x64
-          path: release/*.exe
+          path: |
+            release/English-Reader-0.3.0-x64-Setup.exe
+            release/English-Reader-0.3.0-x64-Portable.exe
+            release/update-manifest.json
+            release/SHA256SUMS.txt
+          if-no-files-found: error
           retention-days: 7
   dependency-audit:
     runs-on: ubuntu-latest

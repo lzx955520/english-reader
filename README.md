@@ -1,7 +1,7 @@
 # english-reader
 差生文具多
 
-## Windows 英语精读桌面应用（0.2 多来源预览版）
+## Windows 英语精读桌面应用（0.3 软件更新控制预览版）
 
 每天 30–60 分钟，以六级略高为目标。Electron + React + TypeScript + SQLite；不需要 API key 即可阅读、查词、收藏和复习。
 
@@ -36,7 +36,7 @@ npm run test:ui
 npm run dist:win
 ```
 
-Windows 完整构建目标在 `release/`：`English-Reader-0.2.0-x64-Setup.exe`（NSIS）与 `English-Reader-0.2.0-x64-Portable.exe`（便携启动器）。0.1 历史 GitHub Actions Windows runner 曾成功生成安装包与便携包；0.2 应以当前提交的工作流结果为准，见 [验证记录](docs/VALIDATION.md)。单独构建便携包可使用 `npm run dist:portable`。Windows 上打包不需要 Wine；Linux 交叉生成 NSIS/便携启动器需要 Wine。无头 Linux UI 测试需 `xvfb-run -a npm run test:ui`。GitHub Actions 提供 Ubuntu 测试及 Windows 构建流程，未合并、未创建公开 release；已通过的 CI 提交及产物下载入口见验证记录。
+Windows 完整构建目标在 `release/`：`English-Reader-0.3.0-x64-Setup.exe`（NSIS，推荐）与 `English-Reader-0.3.0-x64-Portable.exe`（便携启动器）。0.1 历史 GitHub Actions Windows runner 曾成功生成安装包与便携包；0.3 应以当前提交的工作流结果为准，见 [验证记录](docs/VALIDATION.md)。单独构建便携包可使用 `npm run dist:portable`。Windows 上打包不需要 Wine；Linux 交叉生成 NSIS/便携启动器需要 Wine。无头 Linux UI 测试需 `xvfb-run -a npm run test:ui`。GitHub Actions 提供 Ubuntu 测试及 Windows 构建流程，未合并、未创建公开 release；已通过的 CI 提交及产物下载入口见验证记录。
 
 云端默认缓存目录只读时，使用仓库外可写缓存，例如：
 
@@ -89,6 +89,12 @@ ELECTRON_GET_USE_PROXY=1 GLOBAL_AGENT_HTTP_PROXY="$HTTPS_PROXY" npm ci
 - 难度为句长和长词比例的启发式估计，不是经过校准的考试等级；时长按精读约 45 词/分钟估计。经典第一章可能低于目标难度，界面明确标注为热身材料。
 - 词典并非全量 ECDICT；少数专有名词、冷僻词 / 短语可能缺失，部分原始英文释义可能为空。AI 解释需密钥及单次授权，结果可能出错。原始字段里词性也可能包含于释义文本。
 - Windows 原生启动、系统语音、DPAPI、安装 / 卸载尚未实机测试。产物未经代码签名，可能触发 Windows SmartScreen；不会关闭或规避安全检查。
-- 自动更新只更新阅读材料，不更新应用二进制；不配置开机启动。跨日检查间隔约 1 分钟；全部来源失败不会标记当天更新成功；部分成功时保存结果，其余失败来源可手动重试。恢复联网还受系统 online 事件是否正确发出影响，手动更新可重试。
+- 阅读材料刷新与软件更新彼此独立。软件版本检查使用本仓库的公开 GitHub Releases；尚无正式发布时明确提示没有可用发布。检查版本不会下载或安装软件；下载需单独确认，校验通过后仅显示文件位置，安装程序仍由用户自行运行。不配置开机启动。跨日检查间隔约 1 分钟；全部来源失败不会标记当天更新成功；部分成功时保存结果，其余失败来源可手动重试。恢复联网还受系统 online 事件是否正确发出影响，手动更新可重试。
 
-CI 构建产物为安装包和便携包，保存为保留 7 天的 GitHub Actions artifact；不创建 GitHub Release。当前仍为未签名预览版，Windows 实机验证及完整依赖安全审查尚未完成。历史 Linux 便携构建的校验和在该次 `release/SHA256SUMS.txt`，不应作为当前 CI 产物的校验和。
+源码与安装包均采用公开分发方式。CI 构建产物为安装包、便携包、最小 update-manifest.json 与当次 SHA256SUMS.txt，保存为保留 7 天的 GitHub Actions artifact；本构建工作流不创建 GitHub Release。运行包通过显式白名单组装，保留必要许可证，排除 README、docs、source map、开发依赖清单与构建配置；CI 在打包前后检查实际内容，疑似凭据或私人开发路径会阻止产物上传，日志不输出匹配值。当前仍为未签名预览版，Windows 实机验证及完整依赖安全审查尚未完成。历史 Linux 便携构建的校验和在该次 `release/SHA256SUMS.txt`，不应作为当前 CI 产物的校验和。
+
+### 软件更新与升级准备
+
+优先使用 NSIS 安装包；便携启动器继续保留。0.3 保持 `com.englishreader.desktop` 与 `english-reader` 名称不变，不迁移或重置用户数据目录。升级前在设置中创建完整备份，关闭旧版后自行运行安装包；不要复制 DPAPI 密钥到另一台电脑。应用不自动运行下载文件，也不绕过 Windows SmartScreen。
+
+应用固定检查 [本仓库的公开发布区](https://github.com/lzx955520/english-reader/releases)。构建成功不等于已完成正式发布：未发布时会提示没有可用版本。发布清单只包含版本、平台、架构及安装包名称、大小和 SHA-256；不会将源码仓库设为私有，也不再依赖另一个发布仓库。发布前仍需审查文件并完成 Windows 安装与旧版数据保留验证，详见 [软件更新和构建产物说明](docs/UPDATES.md)。

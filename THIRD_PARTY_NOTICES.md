@@ -34,7 +34,7 @@
 
 ## 桌面运行时
 
-Electron 39：MIT；包含 Chromium、Node.js 等第三方组件，其 LICENSE 与 LICENSES.chromium.html 由 electron-builder 保留在安装包内。构建工具不随应用分发；开发依赖完整许可证清单见 licenses/development.json。
+Electron 39：MIT；包含 Chromium、Node.js 等第三方组件，其 LICENSE 与 LICENSES.chromium.html 由 electron-builder 保留在安装包内。构建工具不随应用分发；开发依赖完整许可证清单仅在源代码仓库的 licenses/development.json 中提供，不包含在运行包内。
 
 ## 词典
 

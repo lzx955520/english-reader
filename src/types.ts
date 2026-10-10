@@ -74,7 +74,20 @@ export type AIRequest = {
   approved: boolean;
   operationId: string;
 };
+export type UpdateStatus = {
+  currentVersion: string;
+  phase: "idle" | "unpublished" | "unsupported" | "checking" | "current" | "available" | "downloading" | "downloaded" | "cancelled" | "error";
+  message: string;
+  latestVersion?: string;
+  received?: number;
+  total?: number;
+};
 export interface ReaderAPI {
+  updateStatus(): Promise<UpdateStatus>;
+  checkUpdate(): Promise<UpdateStatus>;
+  downloadUpdate(): Promise<UpdateStatus>;
+  cancelUpdate(): Promise<void>;
+  revealUpdate(): Promise<boolean>;
   state(): Promise<State>;
   refresh(force?: boolean): Promise<{ added: number; cancelled?: boolean }>;
   cancel(id: string): Promise<void>;

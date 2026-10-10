@@ -11,6 +11,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { z } from "zod";
 import { Store } from "./store";
+import { UpdateManager } from "./updater";
 import { Vault } from "./vault";
 import { callAI } from "./network";
 import { MultiSourceNews } from "./sources";
@@ -34,6 +35,7 @@ app.on("second-instance", () => {
 });
 const jobs = new Map<string, AbortController>();
 let refreshManager: RefreshManager;
+let updater: UpdateManager;
 const assets = path.join(app.getAppPath(), "assets");
 const networkFetch = (url: string, options?: RequestInit) =>
   net.fetch(url, options);
@@ -59,6 +61,11 @@ function register() {
         throw Error("不受信任的请求");
       return fn(...args);
     });
+  handle("updateStatus", () => updater.status());
+  handle("checkUpdate", () => updater.check());
+  handle("downloadUpdate", () => updater.download());
+  handle("cancelUpdate", () => updater.cancel());
+  handle("revealUpdate", () => updater.reveal());
   handle("state", () => {
     const s = store.state();
     for (const f of ["context", "grammar", "selection"] as Feature[]) {
@@ -264,6 +271,12 @@ if (primaryInstance)
       );
       vault = new Vault(app.getPath("userData"), safeStorage);
       refreshManager = new RefreshManager(store, news);
+      updater = new UpdateManager({
+        currentVersion: app.getVersion(), platform: process.platform, arch: process.arch,
+        directory: path.join(app.getPath("userData"), "updates"),
+        fetcher: networkFetch, reveal: file => shell.showItemInFolder(file),
+        enabled: testMode ? false : undefined,
+      });
       register();
       window = new BrowserWindow({
         width: 1340,
@@ -303,6 +316,7 @@ if (primaryInstance)
     });
 app.on("before-quit", () => {
   refreshManager?.cancel();
+  updater?.cancel();
   for (const job of jobs.values()) job.abort();
   store?.close();
 });

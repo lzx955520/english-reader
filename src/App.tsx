@@ -1196,6 +1196,8 @@ function SettingsDialog({
           DeepSeek 官方接口文档 ↗
         </button>
         <hr />
+        <UpdateControls />
+        <hr />
         <h3>备份与导出</h3>
         <div className="data-actions">
           <button
@@ -1244,4 +1246,55 @@ function SettingsDialog({
       </div>
     </div>
   );
+}
+
+function UpdateControls() {
+  const [status, setStatus] = useState<import("./types").UpdateStatus | null>(null);
+  const [error, setError] = useState("");
+  const mounted = useRef(false);
+  const running = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    const read = () => void api.updateStatus().then(s => {
+      if (mounted.current) setStatus(s);
+    }).catch(() => {
+      if (mounted.current) setError("无法读取更新状态");
+    });
+    read();
+    const timer = setInterval(read, 500);
+    return () => {
+      mounted.current = false;
+      clearInterval(timer);
+      void api.cancelUpdate().catch(() => {});
+    };
+  }, []);
+  const busy = status?.phase === "checking" || status?.phase === "downloading";
+  const action = async (which: "checkUpdate" | "downloadUpdate") => {
+    if (running.current) return;
+    running.current = true;
+    setError("");
+    try {
+      const result = await api[which]();
+      if (mounted.current) setStatus(result);
+    } catch {
+      if (mounted.current) setError("更新操作失败，请手动重试。");
+    } finally { running.current = false; }
+  };
+  return <section aria-label="应用更新">
+    <h3>应用更新</h3>
+    <p>当前版本：{status?.currentVersion || "读取中…"}{status?.latestVersion ? " · 新版本：" + status.latestVersion : ""}</p>
+    <p role="status">{error || status?.message}</p>
+    {status?.phase === "downloading" && <p>已下载 {Math.round((status.received || 0) / 1024 / 1024)} / {Math.round((status.total || 0) / 1024 / 1024)} MB</p>}
+    <div className="data-actions">
+      <button className="button" disabled={!status || busy} onClick={() => void action("checkUpdate")}>检查更新</button>
+      {(status?.phase === "available" || ((status?.phase === "error" || status?.phase === "cancelled") && status.latestVersion)) &&
+        <button className="button" disabled={busy} onClick={() => void action("downloadUpdate")}>下载安装包</button>}
+      {busy && <button className="button" onClick={() => void api.cancelUpdate().catch(() => setError("无法取消，请稍后重试。"))}>取消更新操作</button>}
+      {status?.phase === "downloaded" && <button className="button" onClick={() => void api.revealUpdate().then(ok => {
+        if (!ok && mounted.current) setError("安装包已移动或不可访问，请重新下载。");
+      }).catch(() => setError("无法显示安装包，请重新下载。"))}>在文件夹中显示安装包</button>}
+    </div>
+    <p className="small muted">仅手动检查和下载，不会后台下载、运行安装包或退出时安装。当前安装包未签名；HTTPS 和同源 SHA-256 只校验传输完整性，不能独立验证发布者身份。请遵循 Windows 安全提示。</p>
+    <p className="small muted">0.2 旧版需先手动安装一次新版。推荐使用 Setup 安装版；便携版不会自我替换。安装前请使用下方“完整备份”保存学习数据，再退出应用并手动运行安装包。保留原有数据目录；尚未验证真实 Windows 跨版本升级。</p>
+  </section>;
 }
