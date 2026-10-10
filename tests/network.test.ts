@@ -122,7 +122,7 @@ describe("real-source protocol using explicit fixtures", () => {
     };
     await expect(new NewsService(fetcher).refresh(
       new AbortController().signal,
-    )).rejects.toThrow("没有符合");
+    )).resolves.toEqual([]);
     expect(parsedIds).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
   });
 

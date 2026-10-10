@@ -169,3 +169,95 @@ test("settings save without API calls; cancel file dialogs does not lose data; r
   expect(errors).toEqual([]);
   await page.screenshot({ path: "test-results/settings.png", fullPage: true });
 });
+
+test("inline hints: first lemma only, original-word lookup, clean selection/copy and persisted toggle", async () => {
+  const article = (await page.evaluate(() => window.reader.state())).articles.find((a) => a.kind === "classic")!;
+  const rawParagraphs = article.text.split(/\n\n+/);
+  await page.getByRole("button", { name: /Pride and Prejudice · Chapter 1/ }).click();
+  const toggle = page.getByLabel("行内中文提示", { exact: true });
+  await expect(toggle).toBeChecked();
+  await expect.poll(() => page.locator(".inline-gloss").count()).toBeGreaterThan(0);
+  const lemmas = await page.locator(".inline-gloss").evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute("data-lemma")),
+  );
+  expect(new Set(lemmas).size).toBe(lemmas.length);
+  expect(await page.locator(".inline-gloss").first().getAttribute("aria-hidden")).toBe("true");
+  expect(await page.locator(".inline-gloss").first().evaluate((node) => getComputedStyle(node).userSelect)).toBe("none");
+
+  const firstToken = page.locator(".reader-token").filter({ has: page.locator(".inline-gloss") }).first();
+  const word = await firstToken.locator(".word").innerText();
+  await firstToken.locator(".word").click();
+  await expect(page.locator(".selected-word")).toHaveText(word);
+  await expect(page.locator(".definition")).toContainText("ECDICT");
+  await page.getByRole("button", { name: "收藏生词与例句" }).click();
+  await expect.poll(async () => (await page.evaluate(() => window.reader.state())).cards.length).toBe(1);
+  const saved = (await page.evaluate(() => window.reader.state())).cards[0];
+  expect(saved.word).toBe(word.toLowerCase());
+  expect(rawParagraphs).toContain(saved.example);
+  expect(saved.example).not.toMatch(/[\u3400-\u9fff]/);
+
+  // Programmatic ranges intentionally include non-selectable hint DOM: copy
+  // and capture must strip it even when Chromium range.textContent includes it.
+  const copiedWord = await firstToken.evaluate((node) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    node.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    const clipboardData = new DataTransfer();
+    node.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData }));
+    return clipboardData.getData("text/plain");
+  });
+  expect(copiedWord).toBe(word);
+  await expect(page.locator(".selected-word")).toHaveText(word);
+
+  const copiedArticle = await page.locator(".article-body").evaluate((node) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const clipboardData = new DataTransfer();
+    node.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData }));
+    const value = clipboardData.getData("text/plain");
+    selection.removeAllRanges();
+    return value;
+  });
+  expect(copiedArticle).toBe(article.text);
+
+  // A click on the visual hint must not replace the original selected word.
+  await page.locator(".inline-gloss").first().click();
+  await expect(page.locator(".selected-word")).toHaveText(word);
+  await toggle.uncheck();
+  await expect(page.locator(".inline-gloss")).toHaveCount(0);
+  expect((await page.evaluate(() => window.reader.state())).settings.inlineGlosses).toBe(false);
+  await desktop.close();
+  await launch();
+  expect((await page.evaluate(() => window.reader.state())).settings.inlineGlosses).toBe(false);
+  await page.getByRole("button", { name: /Pride and Prejudice · Chapter 1/ }).click();
+  await expect(page.getByLabel("行内中文提示", { exact: true })).not.toBeChecked();
+  await expect(page.locator(".inline-gloss")).toHaveCount(0);
+  await page.getByLabel("行内中文提示", { exact: true }).check();
+  await expect.poll(() => page.locator(".inline-gloss").count()).toBeGreaterThan(0);
+  expect((await page.evaluate(() => window.reader.state())).articles.find((a) => a.id === article.id)?.text).toBe(article.text);
+  await page.getByRole("button", { name: "设置与数据" }).click();
+  await expect(page.getByLabel("默认显示行内中文提示", { exact: true })).toBeChecked();
+  await page.getByLabel("默认显示行内中文提示", { exact: true }).uncheck();
+  await page.getByRole("button", { name: "保存设置" }).click();
+  await expect(page.locator(".inline-gloss")).toHaveCount(0);
+});
+
+test("source diagnostics retain cache context and give per-source offline failure details", async () => {
+  await page.getByRole("button", { name: "更新推荐" }).click();
+  await expect.poll(async () => (await page.evaluate(() => window.reader.state())).sourceDiagnostics?.length || 0).toBeGreaterThan(1);
+  await page.locator(".source-diagnostics summary").click();
+  await expect(page.locator(".source-diagnostics li")).toHaveCount(
+    (await page.evaluate(() => window.reader.state())).sourceDiagnostics!.length,
+  );
+  await expect(page.locator(".source-diagnostics")).toContainText("最近尝试");
+  await expect(page.locator(".source-diagnostics")).toContainText("最近成功");
+  await expect(page.locator(".source-diagnostics")).toContainText("缓存");
+  await expect(page.locator(".source-diagnostics .source-status.failed").first()).toBeVisible();
+  expect((await page.evaluate(() => window.reader.state())).articles.some((a) => a.kind === "news")).toBe(false);
+});

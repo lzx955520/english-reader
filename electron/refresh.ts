@@ -1,11 +1,13 @@
-import type { Article } from "../src/types";
+import type { Article, SourceDiagnostic } from "../src/types";
 import { localDay } from "./domain";
 interface Cache {
   state(): { lastRefresh: string; articles: Pick<Article, "id" | "url">[] };
   addArticles(articles: Article[]): number;
   refreshFailure(error: string): void;
+  saveDiagnostics?(reports: SourceDiagnostic[]): void;
 }
 interface Source {
+  diagnostics?: SourceDiagnostic[];
   refresh(
     signal: AbortSignal,
     cached: ReadonlyArray<Pick<Article, "id" | "url">>,
@@ -39,10 +41,13 @@ export class RefreshManager {
         );
         controller.signal.throwIfAborted();
         this.retryAfter = 0;
-        return { added: this.cache.addArticles(articles) };
+        const added = this.cache.addArticles(articles);
+        if (this.source.diagnostics) this.cache.saveDiagnostics?.(this.source.diagnostics);
+        return { added };
       } catch (e) {
         this.retryAfter = this.clock() + 10 * 60 * 1000;
         if (controller.signal.aborted) return { added: 0, cancelled: true };
+        if (this.source.diagnostics) this.cache.saveDiagnostics?.(this.source.diagnostics);
         this.cache.refreshFailure(
           "无法更新新闻：" + (e instanceof Error ? e.message : "网络不可用"),
         );

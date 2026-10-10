@@ -4,8 +4,10 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { defaults, localDay, normalizeWord, schedule, analyze } from "./domain";
 import { backupSchema, settingsSchema } from "./schemas";
-import type { Article, Card, Definition, Settings, State } from "../src/types";
+import { buildGlosses } from "./gloss";
+import type { SourceDiagnostic, Article, Card, Definition, Settings, State } from "../src/types";
 export class Store {
+  private glossCache = new Map<string, Record<string, { lemma: string; translation: string }>>();
   private constructor(
     private db: Database,
     private dictionary: Database,
@@ -91,12 +93,13 @@ export class Store {
     return {
       articles: this.all<Article>("articles"),
       cards: this.all<Card>("cards"),
-      settings: JSON.parse(this.getMeta("settings")),
+      settings: settingsSchema.parse(JSON.parse(this.getMeta("settings"))),
       lastRefresh: this.getMeta("lastRefresh"),
       refreshError: this.getMeta("refreshError"),
       todayMinutes:
         (JSON.parse(this.getMeta("study") || "{}")[localDay()] || 0) / 60,
       storagePath: path.dirname(this.file),
+      sourceDiagnostics: JSON.parse(this.getMeta("sourceDiagnostics") || "[]"),
     };
   }
   article(id: string) {
@@ -124,6 +127,26 @@ export class Store {
       return added;
     });
   }
+  saveDiagnostics(reports: SourceDiagnostic[]) {
+    const old: SourceDiagnostic[] = JSON.parse(this.getMeta("sourceDiagnostics") || "[]");
+    const articles = this.all<Article>("articles");
+    const merged = reports.map(r => ({
+      ...r,
+      lastSuccess: r.lastSuccess || old.find(x => x.id === r.id)?.lastSuccess || "",
+      cached: articles.filter(a => a.id.startsWith(r.id + "-")).length,
+    }));
+    this.transaction(() => this.setMeta("sourceDiagnostics", JSON.stringify(merged)));
+  }
+  glosses(id: string) {
+    const article = this.article(id);
+    if (!article) throw Error("材料不存在");
+    const key = id + "\0" + article.text;
+    if (!this.glossCache.has(key)) {
+      if (this.glossCache.size >= 8) this.glossCache.delete(this.glossCache.keys().next().value!);
+      this.glossCache.set(key, buildGlosses(article.text, word => this.lookup(word)));
+    }
+    return this.glossCache.get(key)!;
+  }
   refreshFailure(error: string) {
     this.transaction(() => this.setMeta("refreshError", error));
   }
@@ -149,6 +172,10 @@ export class Store {
         const r = s.getAsObject();
         return {
           word: String(r.word),
+          tag: typeof r.tag === "string" ? r.tag : undefined,
+          bnc: typeof r.bnc === "number" ? r.bnc : undefined,
+          frq: typeof r.frq === "number" ? r.frq : undefined,
+          oxford: typeof r.oxford === "number" ? r.oxford : undefined,
           phonetic: String(r.phonetic),
           definition: String(r.definition),
           translation: String(r.translation),
@@ -261,6 +288,8 @@ export class Store {
       throw Error("备份包含无来源卡片");
     return this.transaction(() => {
       this.db.run("DELETE FROM articles; DELETE FROM cards;");
+      this.glossCache.clear();
+      this.setMeta("sourceDiagnostics", "[]");
       for (const a of b.articles) this.upsertArticle(a);
       for (const c of b.cards)
         this.db.run("INSERT INTO cards VALUES(?,?)", [c.id, JSON.stringify(c)]);

@@ -12,7 +12,8 @@ import fs from "node:fs";
 import { z } from "zod";
 import { Store } from "./store";
 import { Vault } from "./vault";
-import { NewsService, callAI } from "./network";
+import { callAI } from "./network";
+import { MultiSourceNews } from "./sources";
 import { localDay } from "./domain";
 import { RefreshManager } from "./refresh";
 import { feature, settingsSchema } from "./schemas";
@@ -36,7 +37,7 @@ let refreshManager: RefreshManager;
 const assets = path.join(app.getAppPath(), "assets");
 const networkFetch = (url: string, options?: RequestInit) =>
   net.fetch(url, options);
-const news = new NewsService(
+const news = new MultiSourceNews(
   testMode && process.env.READER_TEST_OFFLINE === "1"
     ? async () => {
         throw Error("测试断网");
@@ -77,6 +78,7 @@ function register() {
     if (name === "refresh") refreshManager.cancel();
     else jobs.get(name)?.abort();
   });
+  handle("glosses", (article: unknown) => store.glosses(id.parse(article)));
   handle("lookup", (word: unknown) =>
     store.lookup(z.string().max(120).parse(word)),
   );

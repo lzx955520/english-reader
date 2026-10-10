@@ -1,6 +1,6 @@
 import { load } from "cheerio";
 import { analyze, rank } from "./domain";
-import type { Article, Feature, ModelConfig } from "../src/types";
+import type { Article, Feature, ModelConfig, SourceDiagnostic } from "../src/types";
 export type Fetcher = (url: string, options?: RequestInit) => Promise<Response>;
 export async function boundedText(response: Response, max = 3_000_000) {
   if (!response.ok) throw Error(`服务返回 HTTP ${response.status}`);
@@ -45,7 +45,7 @@ export function parseNews(
   const published = new Date(timestamp).toISOString().slice(0, 10);
   if (
     timestamp > now.getTime() + 86400000 ||
-    now.getTime() - timestamp > 30 * 86400000
+    now.getTime() - timestamp > 180 * 86400000
   )
     return null;
   const $ = load(p.text);
@@ -58,7 +58,7 @@ export function parseNews(
     .filter((t) => t.length > 60 && !/^This (article|page)/.test(t));
   const text = paragraphs.join("\n\n");
   const metrics = analyze(text);
-  if (metrics.words < 200 || metrics.words > 2200) return null;
+  if (metrics.words < 100 || metrics.words > 6000) return null;
   return {
     id: `wikinews-${pageId}`,
     title,
@@ -77,11 +77,18 @@ export function parseNews(
   };
 }
 export class NewsService {
+  diagnostics: SourceDiagnostic[] = [];
+  partialArticles: Article[] = [];
   constructor(private fetcher: Fetcher = fetch) {}
   async refresh(
     signal: AbortSignal,
     cached: ReadonlyArray<Pick<Article, "id" | "url">> = [],
   ) {
+    const report: SourceDiagnostic = { id: "wikinews", name: "Wikinews", url: "https://en.wikinews.org/", status: "no-new",
+      lastAttempt: new Date().toISOString(), lastSuccess: "", candidates: 0, added: 0, duplicates: 0, filtered: 0, failures: 0,
+      cached: cached.filter(a => a.id.startsWith("wikinews-")).length, message: "" };
+    this.diagnostics = [report];
+    this.partialArticles = [];
     const get = async (params: Record<string, string>) => {
       const url = new URL("https://en.wikinews.org/w/api.php");
       for (const [k, v] of Object.entries({
@@ -93,7 +100,7 @@ export class NewsService {
       const r = await this.fetcher(url.toString(), {
         signal: AbortSignal.any([signal, AbortSignal.timeout(20000)]),
         headers: {
-          "User-Agent": "EnglishReader/0.1 (noncommercial reading app)",
+          "User-Agent": "EnglishReader/0.2 (noncommercial reading app)",
         },
       });
       return JSON.parse(await boundedText(r));
@@ -133,7 +140,9 @@ export class NewsService {
     }
     if (!Array.isArray(list?.query?.categorymembers))
       throw Error("无法获取真实新闻列表");
+    report.candidates = list.query.categorymembers.length;
     const articles: Article[] = [];
+    this.partialArticles = articles;
     const seenIds = new Set(cached.map((a) => a.id));
     const seenUrls = new Set(cached.map((a) => a.url));
     let failures = 0;
@@ -142,7 +151,7 @@ export class NewsService {
       signal.throwIfAborted();
       const id = `wikinews-${item.pageid}`;
       const url = `https://en.wikinews.org/?curid=${item.pageid}`;
-      if (seenIds.has(id) || seenUrls.has(url)) continue;
+      if (seenIds.has(id) || seenUrls.has(url)) { report.duplicates++; continue; }
       seenIds.add(id);
       seenUrls.add(url);
       if (attempted >= 10) break;
@@ -162,19 +171,19 @@ export class NewsService {
           license,
         );
         if (a) articles.push(a);
+        else report.filtered++;
       } catch (e) {
         if (signal.aborted) throw e;
         failures++;
+        report.failures++;
       }
       if (articles.length >= 3) break;
     }
-    // An entirely cached list is a successful check with no new material.
-    if (!articles.length && (attempted > 0 || !list.query.categorymembers.length))
-      throw Error(
-        failures
-          ? "新闻正文获取失败，保留已有缓存"
-          : "来源最近 30 天没有符合长度与日期要求的材料，保留已有缓存",
-      );
+    report.added = articles.length;
+    report.status = articles.length ? "updated" : failures ? "failed" : report.filtered ? "filtered" : "no-new";
+    report.lastSuccess = report.status === "failed" ? "" : new Date().toISOString();
+    report.message = failures ? "部分正文获取失败，保留缓存" : report.filtered ? "日期、撤稿或正文长度检查未通过；难度不作为拒收条件" : "";
+    if (!articles.length && failures) throw Error("新闻正文获取失败，保留已有缓存");
     return rank(articles).slice(0, 3);
   }
 }

@@ -7,6 +7,7 @@ const api: ReaderAPI = {
   refresh: (force) => invoke("refresh", force),
   cancel: (id) => invoke("cancel", id),
   lookup: (word) => invoke("lookup", word),
+  glosses: (id) => invoke("glosses", id),
   progress: (...args) => invoke("progress", ...args),
   saveCard: (input) => invoke("saveCard", input),
   review: (...args) => invoke("review", ...args),

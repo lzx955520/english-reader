@@ -1,6 +1,7 @@
 import type { Card, Article, Settings } from "../src/types";
 export const defaults: Settings = {
   dailyMinutes: 45,
+  inlineGlosses: true,
   models: {
     context: {
       provider: "deepseek",
@@ -33,10 +34,10 @@ export function analyze(text: string) {
     minutes: Math.max(5, Math.ceil(tokens.length / 45)),
     difficulty:
       avg > 26 || long > 0.2
-        ? "高于六级 · 挑战"
+        ? "较难 · 挑战（估计）"
         : avg > 15 || long > 0.12
-          ? "六级略高 · 推荐"
-          : "四至六级 · 热身",
+          ? "适中略高 · 推荐（估计）"
+          : "较易 · 热身（估计）",
   };
 }
 export function schedule(
@@ -89,7 +90,8 @@ export function rank(articles: Article[]) {
       (x.difficulty.includes("略高") ? 30 : 0) +
       (x.minutes >= 8 && x.minutes <= 25 ? 15 : 0) -
       x.progress * 15;
-    return score(b) - score(a) || b.published.localeCompare(a.published);
+    // Fresh publication comes first; difficulty is advisory within a day.
+    return b.published.localeCompare(a.published) || score(b) - score(a);
   });
 }
 export function normalizeWord(word: string) {

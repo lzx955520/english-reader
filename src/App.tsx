@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { annotateArticle, rawReaderSelection, type GlossMap } from "./gloss";
 import {
   BookOpen,
   CalendarDays,
@@ -37,6 +38,11 @@ function humanError(e: unknown) {
   const raw = e instanceof Error ? e.message : String(e);
   return raw.replace(/^Error invoking remote method '[^']+': Error: /, "");
 }
+function formatSourceTime(value: string) {
+  if (!value) return "尚无";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN");
+}
 function dayLabel() {
   return new Intl.DateTimeFormat("zh-CN", {
     month: "long",
@@ -61,11 +67,24 @@ export function App() {
     [saving, setSaving] = useState(false);
   const [revealed, setRevealed] = useState(false),
     [reviewBusy, setReviewBusy] = useState(false);
+  const [glosses, setGlosses] = useState<{ id: string; text: string; values: GlossMap }>({ id: "", text: "", values: {} });
+  const [glossSaving, setGlossSaving] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null),
     lookupSequence = useRef(0),
     progressRef = useRef<{ id: string; p: number; y: number } | null>(null),
     progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const article = state?.articles.find((a) => a.id === articleId);
+  const paragraphs = useMemo(
+    () => annotateArticle(
+      article?.text || "",
+      state?.settings.inlineGlosses !== false &&
+        glosses.id === articleId && glosses.text === article?.text
+        ? glosses.values
+        : {},
+    ),
+    [article?.text, articleId, state?.settings.inlineGlosses, glosses],
+  );
   const load = async () => {
     const s = await api.state();
     setState(s);
@@ -109,6 +128,29 @@ export function App() {
       contentRef.current.scrollTop = article.position;
     return flush;
   }, [articleId]);
+  useEffect(() => {
+    if (!article || state?.settings.inlineGlosses === false) return;
+    let cancelled = false;
+    const id = article.id, text = article.text;
+    void api.glosses(id).then((values) => {
+      if (!cancelled) setGlosses({ id, text, values });
+    }).catch((e) => {
+      if (!cancelled) report(e);
+    });
+    return () => { cancelled = true; };
+  }, [articleId, article?.text, state?.settings.inlineGlosses]);
+  const toggleGlosses = async (enabled: boolean) => {
+    if (!state || glossSaving) return;
+    setGlossSaving(true);
+    try {
+      await api.saveSettings({ ...state.settings, inlineGlosses: enabled }, {});
+      await load();
+    } catch (e) {
+      report(e);
+    } finally {
+      setGlossSaving(false);
+    }
+  };
   const openArticle = (a: Article) => {
     flush();
     setArticleId(a.id);
@@ -129,7 +171,7 @@ export function App() {
     progressTimer.current = setTimeout(flush, 400);
   };
   const pickWord = async (word: string, paragraph: string) => {
-    if (window.getSelection()?.toString().trim()) return;
+    if (rawReaderSelection(window.getSelection(), bodyRef.current).trim()) return;
     setSelected(word);
     setSentence(paragraph);
     setAIResult("");
@@ -143,7 +185,7 @@ export function App() {
     }
   };
   const captureSelection = () => {
-    const selection = window.getSelection()?.toString().trim() || "";
+    const selection = rawReaderSelection(window.getSelection(), bodyRef.current).trim();
     if (!selection || selection.length > 10000) return;
     lookupSequence.current++;
     setSelected(selection);
@@ -399,6 +441,15 @@ export function App() {
                   : "已缓存真实新闻"}{" "}
                 · {article.minutes} 分钟
               </span>
+              <label className="gloss-toggle">
+                <input
+                  type="checkbox"
+                  checked={state.settings.inlineGlosses !== false}
+                  disabled={glossSaving}
+                  onChange={(e) => void toggleGlosses(e.target.checked)}
+                />
+                行内中文提示
+              </label>
               <button
                 className="text-button"
                 onClick={() => void api.openSource(article.url).catch(report)}
@@ -411,7 +462,6 @@ export function App() {
                 className="reading-scroll"
                 ref={contentRef}
                 onScroll={onScroll}
-                onMouseUp={captureSelection}
               >
                 <article className="article-text">
                   <div className="eyebrow">{article.source}</div>
@@ -419,34 +469,68 @@ export function App() {
                   <div className="article-meta">
                     {article.published} · {article.words} 词 ·{" "}
                     {article.difficulty}
+                    <span>{article.author} · {article.source} · {article.license}</span>
+                    <button
+                      className="text-button"
+                      onClick={() => void api.openSource(article.licenseUrl).catch(report)}
+                    >许可条款 ↗</button>
                     <span>难度与时长为启发式估计</span>
                   </div>
                   <div className="reader-tip">
                     点击单词查词；拖选短语或长句获得更多帮助。
+                    <span className="gloss-explanation">
+                      中文提示来自离线词典，仅按长词与常见词表粗筛，同一词根只提示一次；
+                      不是精确六级词表，也不是语境翻译。复制与选词保留英文原文。
+                    </span>
                   </div>
-                  {article.text.split(/\n\n+/).map((paragraph, i) => (
-                    <p key={i}>
-                      {paragraph
-                        .split(/([A-Za-z]+(?:['’-][A-Za-z]+)*)/g)
-                        .map((token, j) =>
-                          /[A-Za-z]/.test(token) ? (
-                            <button
-                              key={j}
-                              className="word"
-                              onClick={() => void pickWord(token, paragraph)}
-                            >
-                              {token}
-                            </button>
+                  <div
+                    className="article-body"
+                    ref={bodyRef}
+                    onMouseUp={captureSelection}
+                    onKeyUp={captureSelection}
+                    onCopy={(event) => {
+                      const raw = rawReaderSelection(window.getSelection(), bodyRef.current);
+                      if (!raw) return;
+                      event.preventDefault();
+                      event.clipboardData.setData("text/plain", raw);
+                    }}
+                  >
+                    {paragraphs.map((paragraph, i) => (
+                      <p
+                        key={i}
+                        data-reader-paragraph
+                        data-reader-separator={paragraph.separatorBefore}
+                      >
+                        {paragraph.tokens.map((token, j) =>
+                          token.word ? (
+                            <span className="reader-token" key={j}>
+                              <button
+                                className="word"
+                                onClick={() => void pickWord(token.text, paragraph.text)}
+                              >
+                                {token.text}
+                              </button>
+                              {token.gloss && (
+                                <span
+                                  className="inline-gloss"
+                                  data-inline-gloss
+                                  data-lemma={token.gloss.lemma}
+                                  aria-hidden="true"
+                                  onMouseDown={(event) => event.preventDefault()}
+                                >（{token.gloss.translation}）</span>
+                              )}
+                            </span>
                           ) : (
-                            <span key={j}>{token}</span>
+                            <span key={j}>{token.text}</span>
                           ),
                         )}
-                    </p>
-                  ))}
+                      </p>
+                    ))}
+                  </div>
                   <footer className="attribution">
                     {article.author} · {article.license}
                     <br />
-                    正文未经改写。
+                    正文提取省略导航与参考信息；中文括注为应用添加，可关闭；原版见来源。
                     <button
                       className="text-button"
                       onClick={() =>
@@ -684,7 +768,7 @@ export function App() {
                 <h2>
                   近期英文新闻 <span className="badge">联网推荐</span>
                 </h2>
-                <p>Wikinews · CC BY 4.0 · 最近 30 天 · 每次最多新增 3 篇</p>
+                <p>多个真实英文来源 · 按各来源许可收录 · 最近 30 天</p>
               </div>
               <button
                 className="button"
@@ -708,6 +792,41 @@ export function App() {
                 <WifiOff size={17} />
                 <span>{state.refreshError}。不会以示例代替实时新闻。</span>
               </div>
+            )}
+            {!!state.sourceDiagnostics?.length && (
+              <details className="source-diagnostics">
+                <summary>
+                  来源更新详情 · {state.sourceDiagnostics.filter((source) => source.status === "failed").length} 个失败
+                  {" · "}{state.sourceDiagnostics.reduce((sum, source) => sum + source.cached, 0)} 篇缓存
+                </summary>
+                <p className="muted small">
+                  每个来源独立检查；失败时保留已有缓存。“更新推荐”会重新检查全部来源。
+                </p>
+                <ul>
+                  {state.sourceDiagnostics.map((source) => (
+                    <li key={source.id}>
+                      <div className="source-status-heading">
+                        <button
+                          className="text-button"
+                          onClick={() => void api.openSource(source.url).catch(report)}
+                        >{source.name} ↗</button>
+                        <span className={source.status === "failed" ? "source-status failed" : "source-status"}>
+                          {({ updated: "有新增", "no-new": "无新增", filtered: "已筛选", failed: "更新失败" })[source.status]}
+                        </span>
+                      </div>
+                      <p>
+                        候选 {source.candidates} · 新增 {source.added} · 重复 {source.duplicates}
+                        {" · "}筛除 {source.filtered} · 失败 {source.failures} · 缓存 {source.cached}
+                      </p>
+                      <p className="small muted">
+                        最近尝试：{formatSourceTime(source.lastAttempt)}
+                        {" · "}最近成功：{formatSourceTime(source.lastSuccess)}
+                      </p>
+                      {source.message && <p className="source-message">{source.message}</p>}
+                    </li>
+                  ))}
+                </ul>
+              </details>
             )}
             {!visibleNews.length ? (
               <div className="news-empty">
@@ -864,6 +983,9 @@ function ArticleTile({
       <p>{a.text.slice(0, 140)}…</p>
       <div className="tile-meta">
         {a.published} · {a.minutes} 分钟 · {a.words} 词
+        {a.kind === "news" && Date.now() - Date.parse(a.published) >= 30 * 86400000 && (
+          <span className="badge neutral">较早缓存</span>
+        )}
       </div>
       <span className="difficulty">{a.difficulty}</span>
       <div className="tile-source">
@@ -967,6 +1089,17 @@ function SettingsDialog({
             <option value={60}>60 分钟</option>
           </select>
         </label>
+        <label className="check-label">
+          <input
+            type="checkbox"
+            checked={draft.inlineGlosses !== false}
+            onChange={(e) => setDraft({ ...draft, inlineGlosses: e.target.checked })}
+          />
+          默认显示行内中文提示
+        </label>
+        <p className="small muted">
+          离线词典 + 保守长词启发式；同一词根只提示一次，不代表精确考试等级。
+        </p>
         <h3>按功能配置模型</h3>
         <div className="model-tabs">
           {(["context", "grammar", "selection"] as Feature[]).map((f) => (
@@ -1091,7 +1224,7 @@ function SettingsDialog({
         </p>
         <p className="storage-path">数据目录：{storagePath}</p>
         <p className="small muted">
-          新闻许可：Wikinews CC BY 4.0；经典公版作品。开源许可证位于安装目录
+          新闻按各来源许可收录，详情见材料原文与许可链接；经典为公版作品。开源许可证位于安装目录
           licenses 与 THIRD_PARTY_NOTICES.md。不开机启动。
         </p>
         <div className="modal-actions">

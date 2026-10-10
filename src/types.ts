@@ -17,6 +17,10 @@ export type Article = {
   position: number;
 };
 export type Definition = {
+  tag?: string;
+  bnc?: number;
+  frq?: number;
+  oxford?: number;
   word: string;
   phonetic: string;
   definition: string;
@@ -50,6 +54,7 @@ export type ModelConfig = {
 };
 export type Settings = {
   dailyMinutes: number;
+  inlineGlosses?: boolean;
   models: Record<Feature, ModelConfig>;
 };
 export type State = {
@@ -60,6 +65,7 @@ export type State = {
   refreshError: string;
   todayMinutes: number;
   storagePath: string;
+  sourceDiagnostics?: SourceDiagnostic[];
 };
 export type AIRequest = {
   feature: Feature;
@@ -73,6 +79,7 @@ export interface ReaderAPI {
   refresh(force?: boolean): Promise<{ added: number; cancelled?: boolean }>;
   cancel(id: string): Promise<void>;
   lookup(word: string): Promise<Definition>;
+  glosses(articleId: string): Promise<Record<string, { lemma: string; translation: string }>>;
   progress(id: string, progress: number, position: number): Promise<void>;
   saveCard(input: {
     word: string;
@@ -98,3 +105,11 @@ declare global {
     reader: ReaderAPI;
   }
 }
+
+export type SourceDiagnostic = {
+  id: string; name: string; url: string;
+  status: "updated" | "no-new" | "filtered" | "failed";
+  lastAttempt: string; lastSuccess: string;
+  candidates: number; added: number; duplicates: number; filtered: number;
+  failures: number; cached: number; message: string;
+};

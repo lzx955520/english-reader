@@ -13,7 +13,7 @@ if manifest.exists():
 path=ROOT/'assets/dictionary.sqlite'
 if path.exists(): path.unlink()
 db=sqlite3.connect(path)
-db.executescript('CREATE TABLE entries(word TEXT PRIMARY KEY, phonetic TEXT, definition TEXT, translation TEXT, pos TEXT); CREATE TABLE forms(form TEXT PRIMARY KEY, word TEXT);')
+db.executescript('CREATE TABLE entries(word TEXT PRIMARY KEY, phonetic TEXT, definition TEXT, translation TEXT, pos TEXT, tag TEXT, bnc INTEGER, frq INTEGER, oxford INTEGER); CREATE TABLE forms(form TEXT PRIMARY KEY, word TEXT);')
 count=0
 for row in csv.DictReader(io.StringIO(raw.decode('utf-8-sig'))):
  def num(k):
@@ -22,7 +22,7 @@ for row in csv.DictReader(io.StringIO(raw.decode('utf-8-sig'))):
  word=row['word'].strip().lower()
  if not word or not row['translation']: continue
  if not (row['tag'] or 0<num('bnc')<=40000 or 0<num('frq')<=40000 or row['oxford']=='1'): continue
- db.execute('INSERT OR IGNORE INTO entries VALUES(?,?,?,?,?)',(word,row['phonetic'],row['definition'].replace('\\n','\n'),row['translation'].replace('\\n','\n'),row['pos']))
+ db.execute('INSERT OR IGNORE INTO entries VALUES(?,?,?,?,?,?,?,?,?)',(word,row['phonetic'],row['definition'].replace('\\n','\n'),row['translation'].replace('\\n','\n'),row['pos'],row['tag'],num('bnc'),num('frq'),num('oxford')))
  for item in row['exchange'].split('/'):
   if ':' in item:
    key,forms=item.split(':',1)

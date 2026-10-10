@@ -112,3 +112,27 @@ describe("SQLite integration", () => {
     expect(store.state().refreshError).toBe("网络不可用");
   });
 });
+
+it("persists source diagnostics and retains previous success on failure", async () => {
+  const report = { id:"nih", name:"NIH Research Matters",url:"https://www.nih.gov/nih-research-matters/feed.xml",
+    status:"no-new" as const,lastAttempt:"2026-10-10T00:00:00.000Z",lastSuccess:"2026-10-10T00:00:00.000Z",
+    candidates:1,added:0,duplicates:1,filtered:0,failures:0,cached:0,message:"" };
+  store.saveDiagnostics([report]);
+  store.saveDiagnostics([{...report,status:"failed",lastSuccess:"",failures:1,message:"offline"}]);
+  store.saveSettings({...defaults,inlineGlosses:false});
+  store.close(); store = await Store.open(directory,path.resolve("assets"));
+  expect(store.state().sourceDiagnostics?.[0].lastSuccess).toBe(report.lastSuccess);
+  expect(store.state().sourceDiagnostics?.[0].status).toBe("failed");
+  expect(store.state().settings.inlineGlosses).toBe(false);
+});
+it("old backups default gloss settings and glossary leaves source text intact",()=>{
+  const b=store.backup();
+  delete b.settings.inlineGlosses;
+  store.restore(b);
+  expect(store.state().settings.inlineGlosses).toBe(true);
+  const a=store.state().articles[0], text=a.text;
+  const first=store.glosses(a.id),again=store.glosses(a.id);
+  expect(again).toEqual(first);
+  expect(store.article(a.id)?.text).toBe(text);
+  expect(store.glosses(a.id).truth).toBeUndefined();
+});

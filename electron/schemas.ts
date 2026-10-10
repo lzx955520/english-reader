@@ -70,6 +70,7 @@ export const model = z.object({
   model: z.string().trim().min(1).max(100),
 });
 export const settingsSchema = z.object({
+  inlineGlosses: z.boolean().default(true),
   dailyMinutes: z.number().int().min(30).max(60),
   models: z.object({ context: model, grammar: model, selection: model }),
 });
