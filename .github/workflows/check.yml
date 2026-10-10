@@ -42,8 +42,8 @@ jobs:
         with:
           name: english-reader-windows-x64
           path: |
-            release/English-Reader-0.3.0-x64-Setup.exe
-            release/English-Reader-0.3.0-x64-Portable.exe
+            release/English-Reader-0.3.2-x64-Setup.exe
+            release/English-Reader-0.3.2-x64-Portable.exe
             release/update-manifest.json
             release/SHA256SUMS.txt
           if-no-files-found: error
@@ -90,3 +90,4 @@ jobs:
       - run: npm ci
       - name: Read-only public updater check and verified download
         run: node scripts/check-public-update.mjs
+

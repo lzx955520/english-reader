@@ -7,7 +7,20 @@ import type { UpdateStatus } from "../src/types";
 export const UPDATE_CHANNEL_ENABLED = true;
 export const UPDATE_REPOSITORY = "lzx955520/english-reader";
 const root = "https://github.com/" + UPDATE_REPOSITORY + "/releases/download/";
-const api = "https://api.github.com/repos/" + UPDATE_REPOSITORY + "/releases/latest";
+export const UPDATE_MANIFEST_URL = "https://github.com/" + UPDATE_REPOSITORY + "/releases/latest/download/update-manifest.json";
+const CACHE_MS = 5 * 60 * 1000;
+class RequestLimit extends Error {
+  constructor(public until: number) { super("GitHub 请求受限，请等待冷却结束后手动重试。"); }
+}
+function retryTime(response: Response, now: number): number {
+  const retry = response.headers.get("retry-after");
+  const seconds = retry && /^\d+$/.test(retry) ? Number(retry) : NaN;
+  const after = Number.isFinite(seconds) ? now + seconds * 1000 : retry ? Date.parse(retry) : NaN;
+  const reset = response.headers.get("x-ratelimit-reset");
+  const resetAt = reset && /^\d+$/.test(reset) ? Number(reset) * 1000 : NaN;
+  return Math.max(now + 60_000, Number.isFinite(after) ? after : 0,
+    response.headers.get("x-ratelimit-remaining") === "0" && Number.isFinite(resetAt) ? resetAt : 0);
+}
 const MAX_INSTALLER = 512 * 1024 * 1024;
 const MAX_JSON = 256 * 1024;
 type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
@@ -40,16 +53,22 @@ export function validateManifest(value: any, version: string): Installer {
 function allowedURL(value: string, initial: string): boolean {
   const u = new URL(value);
   if (u.protocol !== "https:" || u.username || u.password || u.port || u.hash) return false;
-  return value === initial || u.hostname === "release-assets.githubusercontent.com";
+  if (value === initial || u.hostname === "release-assets.githubusercontent.com") return true;
+  // Only the documented latest-manifest redirect may move to a versioned GitHub asset.
+  if (initial !== UPDATE_MANIFEST_URL || !value.startsWith(root) || u.search) return false;
+  const tail = value.slice(root.length);
+  const match = /^v([^/]+)\/update-manifest\.json$/.exec(tail);
+  try { if (match) { stableVersion(match[1]); return true; } } catch { /* fail closed */ }
+  return false;
 }
-async function request(fetcher: Fetcher, initial: string, signal: AbortSignal): Promise<Response> {
+async function request(fetcher: Fetcher, initial: string, signal: AbortSignal, now: () => number = Date.now): Promise<Response> {
   let url = initial;
   for (let i = 0; i < 5; i++) {
     signal.throwIfAborted();
     if (!allowedURL(url, initial)) throw Error("更新下载地址不可信");
     const response = await fetcher(url, {
       redirect: "manual", credentials: "omit", signal,
-      headers: { Accept: "application/vnd.github+json", "User-Agent": "English-Reader-Update" },
+      headers: { Accept: "application/octet-stream", "User-Agent": "English-Reader-Update" },
     });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
@@ -60,7 +79,10 @@ async function request(fetcher: Fetcher, initial: string, signal: AbortSignal): 
     }
     if (!response.ok) await response.body?.cancel().catch(() => {});
     if (response.status === 404) throw Error("更新渠道尚未发布或不可访问");
-    if (response.status === 403 || response.status === 429) throw Error("GitHub 请求受限，请稍后手动重试");
+    if (response.status === 429 || response.status === 403 &&
+        (response.headers.get("x-ratelimit-remaining") === "0" || response.headers.has("retry-after")))
+      throw new RequestLimit(retryTime(response, now()));
+    if (response.status === 403) throw Error("GitHub 拒绝访问（403），请检查网络或稍后手动重试；这不一定是请求配额耗尽。");
     if (!response.ok) throw Error("更新服务暂不可用");
     return response;
   }
@@ -91,19 +113,10 @@ async function chunks(response: Response, limit: number, signal: AbortSignal, co
     reader.releaseLock();
   }
 }
-async function json(fetcher: Fetcher, url: string, signal: AbortSignal) {
+async function json(fetcher: Fetcher, url: string, signal: AbortSignal, now: () => number) {
   const pieces: Buffer[] = [];
-  await chunks(await request(fetcher, url, signal), MAX_JSON, signal, async b => { pieces.push(Buffer.from(b)); });
+  await chunks(await request(fetcher, url, signal, now), MAX_JSON, signal, async b => { pieces.push(Buffer.from(b)); });
   return JSON.parse(Buffer.concat(pieces).toString("utf8"));
-}
-function asset(release: any, name: string, tag: string) {
-  const matches = release.assets?.filter((a: any) => a.name === name);
-  const expected = root + tag + "/" + name;
-  if (!Array.isArray(matches) || matches.length !== 1 ||
-      matches[0].browser_download_url !== expected ||
-      !Number.isSafeInteger(matches[0].size) || matches[0].size <= 0)
-    throw Error("发布附件不匹配");
-  return matches[0];
 }
 export class UpdateManager {
   private state: UpdateStatus;
@@ -111,9 +124,18 @@ export class UpdateManager {
   private downloaded?: string;
   private controller?: AbortController;
   private generation = 0;
+  private checkedAt?: number;
+  private cached?: { state: UpdateStatus; candidate?: Candidate };
+  private retryAt = 0;
+  private now() { return this.options.now?.() ?? Date.now(); }
+  private cooling() {
+    if (this.now() >= this.retryAt) return false;
+    this.state = { ...this.state, phase: "error", message: "GitHub 请求受限，请约 " + Math.ceil((this.retryAt - this.now()) / 1000) + " 秒后手动重试。" };
+    return true;
+  }
   constructor(private options: {
     currentVersion: string; platform: string; arch: string; directory: string;
-    fetcher: Fetcher; reveal: (file: string) => void; enabled?: boolean;
+    fetcher: Fetcher; reveal: (file: string) => void; enabled?: boolean; now?: () => number;
   }) {
     stableVersion(options.currentVersion);
     this.state = { currentVersion: options.currentVersion, phase: "idle",
@@ -130,6 +152,7 @@ export class UpdateManager {
     this.state = { ...this.state, phase, message: phase === "checking" ? "正在检查更新…" : "正在下载安装包…", received: 0 };
     try { await fn(controller.signal); }
     catch (e) {
+      if (e instanceof RequestLimit) this.retryAt = e.until;
       this.state = { ...this.state, phase: controller.signal.aborted ? "cancelled" : "error",
         message: controller.signal.aborted ? "操作已取消或超时，可手动重试。" :
           e instanceof Error && /^(更新|GitHub|发布|版本)/.test(e.message) ? e.message :
@@ -138,7 +161,13 @@ export class UpdateManager {
     return this.status();
   }
   async check() {
-    if (this.controller) return this.status();
+    if (this.controller || this.cooling()) return this.status();
+    if (this.cached && this.checkedAt !== undefined && this.now() - this.checkedAt >= 0 && this.now() - this.checkedAt < CACHE_MS) {
+      if (this.state.phase === "downloaded") return this.status();
+      this.candidate = this.cached.candidate;
+      this.state = { ...this.cached.state, message: this.cached.state.message + "（使用 5 分钟内的检查结果）" };
+      return this.status();
+    }
     this.generation++;
     this.candidate = undefined;
     // Do not delete a verified prior download until a new download is requested.
@@ -152,29 +181,28 @@ export class UpdateManager {
       return this.status();
     }
     return this.operation("checking", async signal => {
-      const release = await json(this.options.fetcher, api, signal);
-      if (!release || release.draft !== false || release.prerelease !== false ||
-          typeof release.tag_name !== "string" || !release.tag_name.startsWith("v"))
-        throw Error("发布版本无效");
-      const version = release.tag_name.slice(1);
-      stableVersion(version);
+      // Public release asset metadata avoids anonymous REST API quota entirely.
+      // Never fall back to another origin after access denial or rate limiting.
+      const latest = await json(this.options.fetcher, UPDATE_MANIFEST_URL, signal, () => this.now());
+      const version = latest?.version;
+      const advertised = validateManifest(latest, version);
+      const pinnedURL = root + "v" + version + "/update-manifest.json";
+      const installer = validateManifest(await json(this.options.fetcher, pinnedURL, signal, () => this.now()), version);
+      if (JSON.stringify(advertised) !== JSON.stringify(installer)) throw Error("更新清单在检查期间发生变化，请稍后重试");
+      signal.throwIfAborted();
       if (!isNewer(version, this.options.currentVersion)) {
         this.state = { ...this.state, phase: "current", message: "没有可用的更高稳定版本。" };
+        this.checkedAt = this.now(); this.cached = { state: { ...this.state } };
         return;
       }
-      const manifestAsset = asset(release, "update-manifest.json", release.tag_name);
-      if (manifestAsset.size > MAX_JSON) throw Error("更新清单过大");
-      const installer = validateManifest(await json(this.options.fetcher, manifestAsset.browser_download_url, signal), version);
-      const installerAsset = asset(release, installer.name, release.tag_name);
-      if (installerAsset.size !== installer.size) throw Error("更新附件大小不匹配");
-      signal.throwIfAborted();
-      this.candidate = { version, installer, url: installerAsset.browser_download_url };
+      this.candidate = { version, installer, url: root + "v" + version + "/" + installer.name };
       this.state = { ...this.state, phase: "available", latestVersion: version, total: installer.size,
         message: "发现新版本。下载安装包后需由你在文件夹中手动运行；不会自动安装。" };
+      this.checkedAt = this.now(); this.cached = { state: { ...this.state }, candidate: this.candidate };
     });
   }
   async download() {
-    if (this.controller) return this.status();
+    if (this.controller || this.cooling()) return this.status();
     if (this.state.phase === "downloaded") return this.status();
     const candidate = this.candidate;
     if (!candidate) return this.status();
@@ -189,7 +217,7 @@ export class UpdateManager {
       try {
         handle = await fs.open(temporary, "wx", 0o600);
         const hash = createHash("sha256");
-        const response = await request(this.options.fetcher, candidate.url, signal);
+        const response = await request(this.options.fetcher, candidate.url, signal, () => this.now());
         const total = await chunks(response, candidate.installer.size, signal, async bytes => {
           hash.update(bytes);
           await handle!.writeFile(bytes);

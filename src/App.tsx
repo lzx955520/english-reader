@@ -63,14 +63,15 @@ export function App() {
     [sentence, setSentence] = useState("");
   const [aiResult, setAIResult] = useState(""),
     [busyAI, setBusyAI] = useState(false),
-    [aiProposal, setAIProposal] = useState<Feature | null>(null),
-    [allowed, setAllowed] = useState(false),
+    [sessionAI, setSessionAI] = useState(false),
+    [consentBusy, setConsentBusy] = useState(false),
     [saving, setSaving] = useState(false);
   const [revealed, setRevealed] = useState(false),
     [reviewBusy, setReviewBusy] = useState(false);
   const [glosses, setGlosses] = useState<{ id: string; text: string; values: GlossMap }>({ id: "", text: "", values: {} });
   const [glossSaving, setGlossSaving] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const consentRevision = useRef(-1);
   const contentRef = useRef<HTMLDivElement>(null),
     lookupSequence = useRef(0),
     progressRef = useRef<{ id: string; p: number; y: number } | null>(null),
@@ -89,6 +90,11 @@ export function App() {
   const load = async () => {
     const s = await api.state();
     setState(s);
+    const status = await api.aiConsentStatus();
+    if (status.revision >= consentRevision.current) {
+      consentRevision.current = status.revision;
+      setSessionAI(status.enabled);
+    }
     return s;
   };
   const report = (e: unknown) => setNotice(humanError(e));
@@ -262,19 +268,16 @@ export function App() {
       );
       return;
     }
-    setAllowed(false);
-    setAIProposal(feature);
+    if (busyAI) return;
+    void runAI(feature);
   };
-  const runAI = async () => {
-    if (!aiProposal || !allowed || busyAI) return;
-    const feature = aiProposal;
-    setAIProposal(null);
+  const runAI = async (feature: Feature) => {
+    if (busyAI) return;
     setBusyAI(true);
     setAIResult("");
     try {
       const result = await api.ai({
         feature,
-        approved: true,
         text:
           feature === "selection"
             ? JSON.stringify(
@@ -297,6 +300,7 @@ export function App() {
       report(e);
     } finally {
       setBusyAI(false);
+      void load().catch(report);
     }
   };
   const speak = () => {
@@ -412,6 +416,17 @@ export function App() {
           <p>阅读计时仅统计前台窗口。</p>
         </div>
         <div className="sidebar-footer">
+          <button role="switch" aria-checked={sessionAI} disabled={consentBusy}
+            onClick={async () => {
+              if (consentBusy) return;
+              setConsentBusy(true);
+              try { await api.setAIConsent(!sessionAI); await load(); }
+              catch (e) { report(e); }
+              finally { setConsentBusy(false); }
+            }}>
+            {sessionAI ? "本次 AI 授权：已开启" : "开启本次 AI 授权"}
+          </button>
+          <span className="privacy">仅主动点击的请求 · 退出即失效 · 可随时关闭</span>
           <p>六级略高 · 每日 30–60 分钟</p>
           <button onClick={() => setSettingsOpen(true)}>
             <SettingsIcon size={18} />
@@ -924,47 +939,7 @@ export function App() {
           report={report}
         />
       )}
-      {aiProposal && (
-        <div className="modal-backdrop">
-          <div
-            className="modal ai-confirm"
-            role="dialog"
-            aria-label="确认 AI 请求"
-          >
-            <h2>授权本次 AI 请求</h2>
-            <p>
-              将所选文本{aiProposal === "context" ? "和当前段落" : ""}
-              发送给你配置的提供商，可能产生费用。不会自动重试。
-            </p>
-            <div className="config-summary">
-              {state.settings.models[aiProposal].provider} ·{" "}
-              {state.settings.models[aiProposal].model}
-              <br />
-              {state.settings.models[aiProposal].baseUrl}
-            </div>
-            <label className="check-label">
-              <input
-                type="checkbox"
-                checked={allowed}
-                onChange={(e) => setAllowed(e.target.checked)}
-              />
-              我同意发送文本并承担本次 API 费用
-            </label>
-            <div className="modal-actions">
-              <button className="button" onClick={() => setAIProposal(null)}>
-                取消
-              </button>
-              <button
-                className="button primary"
-                disabled={!allowed}
-                onClick={() => void runAI()}
-              >
-                发送本次请求
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 }
@@ -1298,3 +1273,4 @@ function UpdateControls() {
     <p className="small muted">0.2 旧版需先手动安装一次新版。推荐使用 Setup 安装版；便携版不会自我替换。安装前请使用下方“完整备份”保存学习数据，再退出应用并手动运行安装包。保留原有数据目录；尚未验证真实 Windows 跨版本升级。</p>
   </section>;
 }
+

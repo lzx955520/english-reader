@@ -10,6 +10,7 @@ import {
 import path from "node:path";
 import fs from "node:fs";
 import { z } from "zod";
+import { SessionConsent, consentDetails, consentPreview } from "./consent";
 import { Store } from "./store";
 import { UpdateManager } from "./updater";
 import { Vault } from "./vault";
@@ -34,6 +35,13 @@ app.on("second-instance", () => {
   }
 });
 const jobs = new Map<string, AbortController>();
+const consent = new SessionConsent();
+function revokeConsent() {
+  consent.revoke();
+  for (const job of jobs.values()) job.abort();
+}
+function consentStatus() { return { enabled: consent.enabled, revision: consent.revision }; }
+
 let refreshManager: RefreshManager;
 let updater: UpdateManager;
 const assets = path.join(app.getAppPath(), "assets");
@@ -61,6 +69,23 @@ function register() {
         throw Error("不受信任的请求");
       return fn(...args);
     });
+  handle("aiConsentStatus", () => consentStatus());
+  handle("setAIConsent", async (input: unknown) => {
+    const enabled = z.boolean().parse(input);
+    if (!enabled) { revokeConsent(); return consentStatus(); }
+    if (consent.enabled) return consentStatus();
+    const revision = consent.revision;
+    const owner = window!;
+    const result = await dialog.showMessageBox(owner, {
+      type: "warning", title: "本次使用的 AI 授权",
+      buttons: ["取消", "同意本次使用的 AI 请求"], defaultId: 0, cancelId: 0,
+      message: "允许本次应用运行期间，你主动点击的 AI 请求不再逐次确认？",
+      detail: consentDetails(store.state().settings.models) +
+        "\n\n仅限你主动点击的语境释义、语法分析和新闻筛选；不会后台调用或自动重试。每次调用可能产生 API 费用。关闭开关会取消尚未完成的请求，但已发送内容无法撤回，服务端可能已计费。退出应用后失效；更改模型、接口、提供商、密钥或恢复备份后需重新授权。",
+    });
+    if (result.response === 1 && window === owner && !owner.isDestroyed()) consent.grant(revision);
+    return consentStatus();
+  });
   handle("updateStatus", () => updater.status());
   handle("checkUpdate", () => updater.check());
   handle("downloadUpdate", () => updater.download());
@@ -128,6 +153,9 @@ function register() {
       })
       .strict()
       .parse(keys);
+    const previous = store.state().settings.models;
+    if (JSON.stringify(previous) !== JSON.stringify(settings.models) ||
+        Object.values(parsed).some(value => value !== undefined)) revokeConsent();
     for (const f of ["context", "grammar", "selection"] as Feature[])
       if (parsed[f] !== undefined) vault.set(f, parsed[f]!);
     store.saveSettings(settings);
@@ -141,18 +169,33 @@ function register() {
         feature,
         text: z.string().min(1).max(15000),
         context: z.string().max(15000).optional(),
-        approved: z.literal(true),
         operationId: id,
       })
       .parse(input);
     if (jobs.has(r.operationId)) throw Error("该请求仍在进行");
     const key = vault.get(r.feature);
     if (!key) throw Error("未配置 API 密钥；请在设置中录入，基础功能不受影响");
+    const config = { ...store.state().settings.models[r.feature] };
+    const revision = consent.revision;
     const controller = new AbortController();
     jobs.set(r.operationId, controller);
     try {
+      if (!consent.enabled) {
+        const owner = window!;
+        const result = await dialog.showMessageBox(owner, {
+          type: "warning", title: "确认 AI 请求",
+          buttons: ["取消", "同意并发送本次请求"], defaultId: 0, cancelId: 0,
+          message: "授权本次 AI 请求",
+          detail: consentDetails({ [r.feature]: config }) +
+            "\n\n本次文本：\n" + consentPreview(r.text) + "\n\n上下文：\n" + consentPreview(r.context || "无") +
+            "\n\n将以上内容发送给所示接口，可能产生 API 费用；不会自动重试。",
+        });
+        if (result.response !== 1 || window !== owner || owner.isDestroyed()) throw Error("请求已取消");
+      }
+      controller.signal.throwIfAborted();
+      if (revision !== consent.revision) throw Error("授权或配置已更改，请重新发起请求");
       const result = await callAI(
-        store.state().settings.models[r.feature],
+        config,
         key,
         r.feature,
         r.text,
@@ -168,6 +211,7 @@ function register() {
       throw Error(
         e instanceof Error && /^服务返回 HTTP \d+$/.test(e.message)
           ? e.message
+          : e instanceof Error && /^(请求已取消|授权或配置已更改)/.test(e.message) ? e.message
           : "AI 请求失败，请检查接口、模型、密钥及网络；不会自动重试",
       );
     } finally {
@@ -209,6 +253,7 @@ function register() {
       `before-restore-${Date.now()}.json`,
     );
     atomicWrite(safety, JSON.stringify(store.backup(), null, 2));
+    revokeConsent();
     store.restore(parsed);
     return true;
   });
@@ -252,7 +297,7 @@ function register() {
   // Integration hooks are not exposed through preload and are unavailable in packaged production builds.
   if (testMode) {
     handle("__testBackup", () => store.backup());
-    handle("__testRestore", (b: unknown) => store.restore(b));
+    handle("__testRestore", (b: unknown) => { revokeConsent(); return store.restore(b); });
   }
 }
 function atomicWrite(file: string, data: string) {
@@ -304,6 +349,7 @@ if (primaryInstance)
       }, 60000);
       timer.unref();
       window.on("closed", () => {
+        revokeConsent();
         window = null;
       });
     })
@@ -315,9 +361,11 @@ if (primaryInstance)
       app.quit();
     });
 app.on("before-quit", () => {
+  revokeConsent();
   refreshManager?.cancel();
   updater?.cancel();
   for (const job of jobs.values()) job.abort();
   store?.close();
 });
 app.on("window-all-closed", () => app.quit());
+
